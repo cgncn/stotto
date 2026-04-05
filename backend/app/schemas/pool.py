@@ -59,6 +59,7 @@ class MatchDetailOut(BaseModel):
     latest_score: MatchScoreOut | None
     score_history: list[dict[str, Any]]
     features: dict[str, Any] | None = None
+    h2h: list[dict[str, Any]] = []
 
     model_config = {"from_attributes": True}
 

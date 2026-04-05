@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.base import get_db
@@ -211,6 +212,46 @@ def get_match_detail(pool_id: int, match_id: int, db: Session = Depends(get_db))
             "market": market_rf,
         }
 
+    # H2H: last 5 fixtures between these two teams in the DB
+    h2h = []
+    if pm.fixture:
+        htid = pm.fixture.home_team_id
+        atid = pm.fixture.away_team_id
+        past_fixtures = (
+            db.query(models.Fixture)
+            .filter(
+                or_(
+                    and_(models.Fixture.home_team_id == htid, models.Fixture.away_team_id == atid),
+                    and_(models.Fixture.home_team_id == atid, models.Fixture.away_team_id == htid),
+                ),
+                models.Fixture.id != pm.fixture_id,
+                models.Fixture.status == "FT",
+            )
+            .order_by(models.Fixture.kickoff_at.desc())
+            .limit(5)
+            .all()
+        )
+        for f in past_fixtures:
+            is_home = f.home_team_id == htid
+            hs = f.home_score if is_home else f.away_score
+            as_ = f.away_score if is_home else f.home_score
+            if hs is None or as_ is None:
+                result = "?"
+            elif hs > as_:
+                result = "W"
+            elif hs < as_:
+                result = "L"
+            else:
+                result = "D"
+            h2h.append({
+                "kickoff_at": f.kickoff_at.isoformat() if f.kickoff_at else None,
+                "home_team": f.home_team.name if f.home_team else "",
+                "away_team": f.away_team.name if f.away_team else "",
+                "home_score": f.home_score,
+                "away_score": f.away_score,
+                "result_from_home_perspective": result,
+            })
+
     return MatchDetailOut(
         id=pm.id,
         sequence_no=pm.sequence_no,
@@ -224,6 +265,7 @@ def get_match_detail(pool_id: int, match_id: int, db: Session = Depends(get_db))
         latest_score=_latest_score(db, pm),
         score_history=score_history,
         features=features,
+        h2h=h2h,
     )
 
 
