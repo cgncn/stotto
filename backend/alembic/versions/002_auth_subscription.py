@@ -22,6 +22,8 @@ def upgrade() -> None:
     op.add_column("users", sa.Column("stripe_subscription_id", sa.String(100), nullable=True, unique=True))
     op.add_column("users", sa.Column("subscription_status", sa.String(30), nullable=True, server_default="inactive"))
     op.add_column("users", sa.Column("subscription_expires_at", sa.DateTime(timezone=True), nullable=True))
+    op.create_unique_constraint("uq_users_stripe_customer_id", "users", ["stripe_customer_id"])
+    op.create_unique_constraint("uq_users_stripe_subscription_id", "users", ["stripe_subscription_id"])
 
     # CREATE TABLE user_coupons
     op.create_table(
@@ -84,6 +86,8 @@ def downgrade() -> None:
     # Drop added columns from users in reverse order
     op.drop_column("users", "subscription_expires_at")
     op.drop_column("users", "subscription_status")
+    op.drop_constraint("uq_users_stripe_subscription_id", "users", type_="unique")
+    op.drop_constraint("uq_users_stripe_customer_id", "users", type_="unique")
     op.drop_column("users", "stripe_subscription_id")
     op.drop_column("users", "stripe_customer_id")
     op.drop_column("users", "display_name")
