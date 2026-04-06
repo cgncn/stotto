@@ -69,13 +69,12 @@ def settle_user_coupons(weekly_pool_id: int, db) -> None:
     actual_results = {m.sequence_no: m.result for m in matches}
 
     # Build match_scores dict: sequence_no -> MatchModelScore (latest)
-    from app.db.models import MatchModelScore
     match_scores = {}
     for m in matches:
         score = (
-            db.query(MatchModelScore)
+            db.query(models.MatchModelScore)
             .filter_by(weekly_pool_match_id=m.id)
-            .order_by(MatchModelScore.created_at.desc())
+            .order_by(models.MatchModelScore.created_at.desc())
             .first()
         )
         if score:
@@ -363,6 +362,9 @@ def task_settle_check(self):
         db.commit()
 
         if all_done and active_pool.matches:
-            settle_user_coupons(active_pool.id, db)
+            try:
+                settle_user_coupons(active_pool.id, db)
+            except Exception as exc:
+                logger.error("settle_user_coupons failed for pool %s: %s", active_pool.id, exc)
 
     return {"status": "ok", "settled": settled}
