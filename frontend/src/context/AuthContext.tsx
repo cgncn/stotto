@@ -70,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = (t: string) => {
     localStorage.setItem(TOKEN_KEY, t);
     setToken(t);
+    setLoading(true);
     fetchProfile(t);
   };
 
