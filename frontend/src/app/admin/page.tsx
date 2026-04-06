@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { post } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 
 export default function AdminPage() {
-  const [token, setToken] = useState("");
+  const { token, login, logout } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -15,7 +16,7 @@ export default function AdminPage() {
   async function login() {
     try {
       const res = await post<{ access_token: string }>("/auth/login", { email, password });
-      setToken(res.access_token);
+      login(res.access_token);
       setMessage("Giriş başarılı.");
     } catch (e: any) {
       setMessage(`Hata: ${e.message}`);
@@ -85,7 +86,7 @@ export default function AdminPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-800">Yönetim Paneli</h1>
         <button
-          onClick={() => setToken("")}
+          onClick={() => logout()}
           className="text-sm text-gray-400 hover:text-red-500"
         >
           Çıkış

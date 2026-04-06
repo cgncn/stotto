@@ -32,6 +32,24 @@ export function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+export function authedGet<T>(path: string, token: string): Promise<T> {
+  return request<T>(path, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function authedPost<T>(
+  path: string,
+  body: unknown,
+  token: string
+): Promise<T> {
+  return request<T>(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface MatchScore {
