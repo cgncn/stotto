@@ -18,8 +18,8 @@ def upgrade() -> None:
     # ALTER TABLE users - add auth/subscription columns
     op.add_column("users", sa.Column("role", sa.String(20), nullable=False, server_default="FREE"))
     op.add_column("users", sa.Column("display_name", sa.String(100), nullable=True))
-    op.add_column("users", sa.Column("stripe_customer_id", sa.String(100), nullable=True, unique=True))
-    op.add_column("users", sa.Column("stripe_subscription_id", sa.String(100), nullable=True, unique=True))
+    op.add_column("users", sa.Column("stripe_customer_id", sa.String(100), nullable=True))
+    op.add_column("users", sa.Column("stripe_subscription_id", sa.String(100), nullable=True))
     op.add_column("users", sa.Column("subscription_status", sa.String(30), nullable=True, server_default="inactive"))
     op.add_column("users", sa.Column("subscription_expires_at", sa.DateTime(timezone=True), nullable=True))
     op.create_unique_constraint("uq_users_stripe_customer_id", "users", ["stripe_customer_id"])
