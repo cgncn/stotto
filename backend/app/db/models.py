@@ -29,6 +29,12 @@ from app.db.base import Base
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
+class UserRole(str, enum.Enum):
+    FREE = "FREE"
+    SUBSCRIBER = "SUBSCRIBER"
+    ADMIN = "ADMIN"
+
+
 class PoolStatus(str, enum.Enum):
     open = "open"
     locked = "locked"
@@ -68,8 +74,21 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
-    is_admin = Column(Boolean, default=False, nullable=False)
+    role = Column(String(20), nullable=False, server_default="FREE")
+    display_name = Column(String(100))
+    stripe_customer_id = Column(String(100))
+    stripe_subscription_id = Column(String(100))
+    subscription_status = Column(String(30), default="inactive")
+    subscription_expires_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == UserRole.ADMIN
+
+    @property
+    def is_subscriber(self) -> bool:
+        return self.role in (UserRole.SUBSCRIBER, UserRole.ADMIN)
 
 
 class Team(Base):
@@ -325,3 +344,40 @@ class ScoreChangeLog(Base):
     new_coverage_pick = Column(String(2))
     change_reason_code = Column(String(100))
     triggered_by = Column(String(100))  # 'daily_refresh', 'pre_kickoff', 'manual'
+
+
+# ── User coupons & subscription ───────────────────────────────────────────────
+
+class UserCoupon(Base):
+    __tablename__ = "user_coupons"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    weekly_pool_id = Column(Integer, ForeignKey("weekly_pools.id"), nullable=False)
+    scenario_type = Column(String(20))
+    picks_json = Column(JSON, nullable=False)
+    column_count = Column(Integer)
+    submitted_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_submitted = Column(Boolean, nullable=False, default=False)
+
+
+class UserCouponPerformance(Base):
+    __tablename__ = "user_coupon_performance"
+    id = Column(Integer, primary_key=True, index=True)
+    user_coupon_id = Column(Integer, ForeignKey("user_coupons.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    week_code = Column(String(20), nullable=False)
+    correct_count = Column(Integer)
+    total_picks = Column(Integer)
+    brier_score = Column(Float)
+    roi_estimate = Column(Float)
+    settled_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SubscriptionLog(Base):
+    __tablename__ = "subscription_log"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    stripe_event_id = Column(String(100), nullable=False, unique=True)
+    event_type = Column(String(80), nullable=False)
+    payload_json = Column(JSON)
+    processed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
