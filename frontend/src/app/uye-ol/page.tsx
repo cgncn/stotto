@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { authedPost } from "@/lib/api";
@@ -33,35 +33,57 @@ function FeatureRow({ label, available }: { label: string; available: boolean })
 }
 
 export default function UyeOlPage() {
-  const { user, token, isSubscriber } = useAuth();
+  const { user, token, isSubscriber, loading: authLoading } = useAuth();
   const router = useRouter();
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authLoading && !token) {
+      router.push("/auth/giris?next=/uye-ol");
+    }
+  }, [authLoading, token, router]);
 
   async function handleCheckout() {
     if (!token) {
       router.push("/auth/giris?next=/uye-ol");
       return;
     }
+    setActionError(null);
     setCheckoutLoading(true);
     try {
       const res = await authedPost<{ url: string }>("/subscriptions/checkout", {}, token);
       window.location.href = res.url;
     } catch {
       setCheckoutLoading(false);
+      setActionError("Ödeme sayfasına yönlendirilemedi. Lütfen tekrar deneyin.");
     }
   }
 
   async function handlePortal() {
     if (!token) return;
+    setActionError(null);
     setPortalLoading(true);
     try {
       const res = await authedPost<{ url: string }>("/subscriptions/portal", {}, token);
       window.location.href = res.url;
     } catch {
       setPortalLoading(false);
+      setActionError("Abonelik yönetim sayfasına yönlendirilemedi. Lütfen tekrar deneyin.");
     }
   }
+
+  if (authLoading) {
+    return (
+      <div className="max-w-3xl mx-auto mt-10 space-y-4 animate-pulse">
+        <div className="h-12 bg-gray-200 rounded-xl" />
+        <div className="h-64 bg-gray-200 rounded-xl" />
+      </div>
+    );
+  }
+
+  if (!token) return null;
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -115,6 +137,11 @@ export default function UyeOlPage() {
 
       {/* CTA */}
       <div className="text-center">
+        {actionError && (
+          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4 inline-block">
+            {actionError}
+          </p>
+        )}
         {isSubscriber ? (
           <div className="bg-green-50 border border-green-200 rounded-xl p-6">
             <p className="text-green-700 font-medium mb-3">

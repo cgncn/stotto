@@ -47,6 +47,7 @@ export default function HesapPage() {
   const [stats, setStats] = useState<UserStats | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !token) {
@@ -82,12 +83,14 @@ export default function HesapPage() {
 
   async function handlePortal() {
     if (!token) return;
+    setPortalError(null);
     setPortalLoading(true);
     try {
       const res = await authedPost<{ url: string }>("/subscriptions/portal", {}, token);
       window.location.href = res.url;
     } catch {
       setPortalLoading(false);
+      setPortalError("Abonelik yönetim sayfasına yönlendirilemedi. Lütfen tekrar deneyin.");
     }
   }
 
@@ -137,6 +140,11 @@ export default function HesapPage() {
           </p>
         )}
 
+        {portalError && (
+          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-2">
+            {portalError}
+          </p>
+        )}
         <div className="flex flex-wrap gap-3 mt-4">
           {isSubscriber ? (
             <button
@@ -207,8 +215,8 @@ export default function HesapPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {coupons.map((c, i) => (
-                  <tr key={i} className="hover:bg-gray-50">
+                {coupons.map((c) => (
+                  <tr key={`${c.week_code}-${c.scenario_type}`} className="hover:bg-gray-50">
                     <td className="py-2 pr-4 text-gray-700">{c.week_code}</td>
                     <td className="py-2 pr-4 text-gray-700 capitalize">{c.scenario_type}</td>
                     <td className="py-2 pr-4 text-right text-gray-700">{c.total_columns}</td>
