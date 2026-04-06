@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Link from "next/link";
 import { AuthProvider } from "@/context/AuthContext";
+import { ClientNav } from "@/components/ClientNav";
 
 export const metadata: Metadata = {
   title: "STOTTO — Spor Toto Karar Destek",
@@ -21,6 +22,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/kupon" className="text-sm hover:opacity-80">
                 Kupon Optimizasyonu
               </Link>
+              <div className="ml-auto">
+                <ClientNav />
+              </div>
             </div>
           </nav>
           <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
