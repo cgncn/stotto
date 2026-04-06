@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.db.base import get_db
 from app.db import models
+from app.api.deps import get_optional_user, require_subscriber
 from app.schemas.pool import (
     PoolSummaryOut,
     PoolMatchSummary,
@@ -18,6 +19,26 @@ from app.schemas.pool import (
 )
 
 router = APIRouter()
+
+
+# ── Subscription tier scrubbing ────────────────────────────────────────────────
+
+def scrub_for_free_tier(data: dict, user) -> dict:
+    """Remove subscriber-only fields for FREE users and unauthenticated requests."""
+    if user is not None and user.is_subscriber:
+        return data
+    # Null out subscriber-only fields
+    subscriber_only_keys = [
+        "home_features", "away_features",  # radar/team feature data
+        "odds_history",                     # odds movement
+        "secondary_pick",                   # secondary pick
+        "recommended_coverage",             # coverage recommendation
+        "coverage_need_score",              # coverage need score
+    ]
+    for key in subscriber_only_keys:
+        if key in data:
+            data[key] = None
+    return data
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
@@ -109,7 +130,12 @@ def get_pool(pool_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{pool_id}/matches/{match_id}", response_model=MatchDetailOut)
-def get_match_detail(pool_id: int, match_id: int, db: Session = Depends(get_db)):
+def get_match_detail(
+    pool_id: int,
+    match_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
     pool = _get_pool_or_404(pool_id, db)
     pm = next((m for m in pool.matches if m.id == match_id), None)
     if not pm:
@@ -252,7 +278,7 @@ def get_match_detail(pool_id: int, match_id: int, db: Session = Depends(get_db))
                 "result_from_home_perspective": result,
             })
 
-    return MatchDetailOut(
+    response_obj = MatchDetailOut(
         id=pm.id,
         sequence_no=pm.sequence_no,
         fixture_external_id=pm.fixture_external_id,
@@ -267,10 +293,21 @@ def get_match_detail(pool_id: int, match_id: int, db: Session = Depends(get_db))
         features=features,
         h2h=h2h,
     )
+    response_data = response_obj.model_dump()
+    # Scrub top-level subscriber-only keys
+    response_data = scrub_for_free_tier(response_data, current_user)
+    # Scrub subscriber-only keys nested inside latest_score
+    if response_data.get("latest_score") is not None:
+        response_data["latest_score"] = scrub_for_free_tier(response_data["latest_score"], current_user)
+    return response_data
 
 
 @router.get("/{pool_id}/coupon-scenarios", response_model=list[CouponScenarioOut])
-def get_coupon_scenarios(pool_id: int, db: Session = Depends(get_db)):
+def get_coupon_scenarios(
+    pool_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_subscriber),
+):
     _get_pool_or_404(pool_id, db)
     scenarios = (
         db.query(models.CouponScenario)
@@ -297,6 +334,7 @@ def coupon_optimize(
     pool_id: int,
     body: CouponOptimizeRequest,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_subscriber),
 ):
     pool = _get_pool_or_404(pool_id, db)
     from app.optimizer.engine import run_optimizer_custom
