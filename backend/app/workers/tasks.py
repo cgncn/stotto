@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 from celery import chain
 
@@ -26,6 +27,87 @@ logger = logging.getLogger(__name__)
 
 # Minutes before kickoff that trigger a pre-kickoff refresh
 PRE_KICKOFF_WINDOWS = [90, 60, 15]
+
+
+def compute_brier(picks_json: dict, match_scores: dict) -> Optional[float]:
+    """Compute Brier score for a coupon against model probability scores.
+
+    picks_json: {sequence_no_str: "1"|"X"|"2"}
+    match_scores: {sequence_no_int: MatchModelScore ORM object}
+    """
+    total = 0.0
+    count = 0
+    for seq_str, pick in picks_json.items():
+        seq = int(seq_str)
+        score = match_scores.get(seq)
+        if score is None:
+            continue
+        # Probabilities for the picked outcome
+        prob_map = {"1": score.p1, "X": score.px, "2": score.p2}
+        prob = prob_map.get(pick)
+        if prob is None:
+            continue
+        # Brier score: mean squared error, lower is better
+        # For picked outcome: (1 - prob)^2, for others: (0 - p)^2
+        other_probs = {"1": score.p1, "X": score.px, "2": score.p2}
+        brier_sum = (1.0 - prob) ** 2
+        for outcome, p in other_probs.items():
+            if outcome != pick:
+                brier_sum += (0.0 - p) ** 2
+        total += brier_sum
+        count += 1
+    return total / count if count > 0 else None
+
+
+def settle_user_coupons(weekly_pool_id: int, db) -> None:
+    """Compute and store performance metrics for all saved user coupons for this week."""
+    pool = db.query(models.WeeklyPool).filter_by(id=weekly_pool_id).first()
+    if not pool:
+        return
+
+    matches = db.query(models.WeeklyPoolMatch).filter_by(weekly_pool_id=weekly_pool_id).all()
+    actual_results = {m.sequence_no: m.result for m in matches}
+
+    # Build match_scores dict: sequence_no -> MatchModelScore (latest)
+    from app.db.models import MatchModelScore
+    match_scores = {}
+    for m in matches:
+        score = (
+            db.query(MatchModelScore)
+            .filter_by(weekly_pool_match_id=m.id)
+            .order_by(MatchModelScore.created_at.desc())
+            .first()
+        )
+        if score:
+            match_scores[m.sequence_no] = score
+
+    coupons = db.query(models.UserCoupon).filter_by(weekly_pool_id=weekly_pool_id).all()
+    for coupon in coupons:
+        # Skip if performance already recorded
+        existing = db.query(models.UserCouponPerformance).filter_by(
+            user_coupon_id=coupon.id
+        ).first()
+        if existing:
+            continue
+
+        picks = coupon.picks_json or {}
+        correct = sum(
+            1
+            for seq_str, pick in picks.items()
+            if actual_results.get(int(seq_str)) == pick
+        )
+
+        perf = models.UserCouponPerformance(
+            user_coupon_id=coupon.id,
+            user_id=coupon.user_id,
+            week_code=pool.week_code,
+            correct_count=correct,
+            total_picks=len(picks),
+            brier_score=compute_brier(picks, match_scores),
+        )
+        db.add(perf)
+
+    db.commit()
 
 
 # ── Weekly import ──────────────────────────────────────────────────────────────
@@ -279,5 +361,8 @@ def task_settle_check(self):
             active_pool.status = models.PoolStatus.settled
 
         db.commit()
+
+        if all_done and active_pool.matches:
+            settle_user_coupons(active_pool.id, db)
 
     return {"status": "ok", "settled": settled}
