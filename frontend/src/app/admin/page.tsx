@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { post } from "@/lib/api";
+import { post, authedPost } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 
 export default function AdminPage() {
-  const [token, setToken] = useState("");
+  const { token, login, logout } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -12,26 +13,24 @@ export default function AdminPage() {
   const [fixtureIds, setFixtureIds] = useState("");
   const [poolId, setPoolId] = useState("");
 
-  async function login() {
+  async function handleLogin() {
     try {
       const res = await post<{ access_token: string }>("/auth/login", { email, password });
-      setToken(res.access_token);
+      login(res.access_token);
       setMessage("Giriş başarılı.");
     } catch (e: any) {
       setMessage(`Hata: ${e.message}`);
     }
   }
 
-  function authHeaders() {
-    return { Authorization: `Bearer ${token}` };
-  }
-
   async function triggerImport() {
+    if (!token) return;
     const ids = fixtureIds.split(",").map((s) => parseInt(s.trim(), 10)).filter(Boolean);
     try {
-      const res = await post<{ detail: string; task_id: string }>(
+      const res = await authedPost<{ detail: string; task_id: string }>(
         "/admin/weekly-import",
-        { week_code: weekCode, fixture_external_ids: ids }
+        { week_code: weekCode, fixture_external_ids: ids },
+        token
       );
       setMessage(`İçe aktarma başlatıldı — task: ${res.task_id}`);
     } catch (e: any) {
@@ -40,10 +39,12 @@ export default function AdminPage() {
   }
 
   async function recompute() {
+    if (!token) return;
     try {
-      const res = await post<{ detail: string; task_id: string }>(
+      const res = await authedPost<{ detail: string; task_id: string }>(
         `/admin/recompute-week/${poolId}`,
-        {}
+        {},
+        token
       );
       setMessage(`Yeniden hesaplama başlatıldı — task: ${res.task_id}`);
     } catch (e: any) {
@@ -70,7 +71,7 @@ export default function AdminPage() {
           className="w-full border rounded px-3 py-2 mb-4 text-sm"
         />
         <button
-          onClick={login}
+          onClick={handleLogin}
           className="w-full bg-brand-600 text-white py-2 rounded hover:bg-brand-700 text-sm"
         >
           Giriş Yap
@@ -85,7 +86,7 @@ export default function AdminPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-800">Yönetim Paneli</h1>
         <button
-          onClick={() => setToken("")}
+          onClick={() => logout()}
           className="text-sm text-gray-400 hover:text-red-500"
         >
           Çıkış

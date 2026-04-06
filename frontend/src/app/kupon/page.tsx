@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { get, post, PoolSummary, CouponScenario } from "@/lib/api";
 import CoverageBadge from "@/components/CoverageBadge";
+import { SubscriberGate } from "@/components/SubscriberGate";
 
 const SCENARIO_LABELS: Record<string, string> = {
   safe: "Güvenli",
@@ -90,46 +91,49 @@ export default function KuponPage() {
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
 
       {/* Default scenarios */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        {["safe", "balanced", "aggressive"].map((type) => {
-          const s = scenarios.find((x) => x.scenario_type === type);
-          return (
-            <div key={type} className="bg-white rounded-xl shadow p-5">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-gray-800">{SCENARIO_LABELS[type]}</span>
-                {s && (
-                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
-                    {s.total_columns} sütun
-                  </span>
+      <SubscriberGate>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          {["safe", "balanced", "aggressive"].map((type) => {
+            const s = scenarios.find((x) => x.scenario_type === type);
+            return (
+              <div key={type} className="bg-white rounded-xl shadow p-5">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-gray-800">{SCENARIO_LABELS[type]}</span>
+                  {s && (
+                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                      {s.total_columns} sütun
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mb-3">{SCENARIO_DESC[type]}</p>
+                {s ? (
+                  <>
+                    {s.expected_coverage_score != null && (
+                      <p className="text-xs text-gray-500 mb-3">
+                        Tahmini Kapsam: %{s.expected_coverage_score.toFixed(4)}
+                      </p>
+                    )}
+                    <div className="space-y-1">
+                      {s.picks.map((p) => (
+                        <div key={p.pool_match_id} className="flex items-center justify-between text-xs">
+                          <span className="text-gray-500">#{p.sequence_no}</span>
+                          <CoverageBadge coveragePick={p.coverage_pick} coverageType={p.coverage_type} />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-gray-300 text-xs">Senaryo henüz üretilmedi.</p>
                 )}
               </div>
-              <p className="text-xs text-gray-400 mb-3">{SCENARIO_DESC[type]}</p>
-              {s ? (
-                <>
-                  {s.expected_coverage_score != null && (
-                    <p className="text-xs text-gray-500 mb-3">
-                      Tahmini Kapsam: %{s.expected_coverage_score.toFixed(4)}
-                    </p>
-                  )}
-                  <div className="space-y-1">
-                    {s.picks.map((p) => (
-                      <div key={p.pool_match_id} className="flex items-center justify-between text-xs">
-                        <span className="text-gray-500">#{p.sequence_no}</span>
-                        <CoverageBadge coveragePick={p.coverage_pick} coverageType={p.coverage_type} />
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <p className="text-gray-300 text-xs">Senaryo henüz üretilmedi.</p>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </SubscriberGate>
 
       {/* Custom optimizer */}
       {poolId && (
+        <SubscriberGate>
         <div className="bg-white rounded-xl shadow p-5">
           <h2 className="font-semibold text-gray-800 mb-4">Özel Optimizasyon</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
@@ -203,6 +207,7 @@ export default function KuponPage() {
             </div>
           )}
         </div>
+        </SubscriberGate>
       )}
     </div>
   );

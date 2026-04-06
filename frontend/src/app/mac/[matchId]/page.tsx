@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { buildExplanation, safeVal, fmt } from "@/lib/explanation";
 import { SkeletonCard, SkeletonBlock } from "@/components/Skeleton";
 import ConfidenceRing from "@/components/ConfidenceRing";
+import { SubscriberGate } from "@/components/SubscriberGate";
 
 const RadarChart = dynamic(() => import("@/components/RadarChart"), { ssr: false });
 
@@ -338,34 +339,36 @@ export default function MatchDetailPage() {
 
       {/* ── Radar + Team comparison ──────────────────────────────────────────── */}
       {feats?.home && feats?.away ? (
-        <div className="bg-white rounded-xl shadow p-5">
-          <h2 className="text-sm font-bold text-gray-700 mb-4">Takım Karşılaştırması</h2>
-          <div className="flex flex-col sm:flex-row gap-4 items-center">
-            <div className="flex-1">
-              <RadarChart dimensions={radarDims} homeTeam={homeTeam} awayTeam={awayTeam} size={240} />
+        <SubscriberGate>
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-sm font-bold text-gray-700 mb-4">Takım Karşılaştırması</h2>
+            <div className="flex flex-col sm:flex-row gap-4 items-center">
+              <div className="flex-1">
+                <RadarChart dimensions={radarDims} homeTeam={homeTeam} awayTeam={awayTeam} size={240} />
+              </div>
+              <div className="flex-1 w-full space-y-1">
+                <StatRow label="Güç Skoru" homeVal={feats.home.strength_score} awayVal={feats.away.strength_score}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
+                <StatRow label="Form Skoru" homeVal={feats.home.form_score} awayVal={feats.away.form_score}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
+                <StatRow label="Maç Başı Puan" homeVal={feats.home.season_ppg} awayVal={feats.away.season_ppg}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => v.toFixed(2)} />
+                <StatRow label="Gol Farkı / Maç" homeVal={feats.home.goal_diff_per_game} awayVal={feats.away.goal_diff_per_game}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v > 0 ? "+" : "") + v.toFixed(2)} />
+                <StatRow label="Hücum Gücü" homeVal={feats.home.attack_index} awayVal={feats.away.attack_index}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
+                <StatRow label="Savunma Gücü" homeVal={feats.home.defense_index} awayVal={feats.away.defense_index}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
+              </div>
             </div>
-            <div className="flex-1 w-full space-y-1">
-              <StatRow label="Güç Skoru" homeVal={feats.home.strength_score} awayVal={feats.away.strength_score}
-                homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
-              <StatRow label="Form Skoru" homeVal={feats.home.form_score} awayVal={feats.away.form_score}
-                homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
-              <StatRow label="Maç Başı Puan" homeVal={feats.home.season_ppg} awayVal={feats.away.season_ppg}
-                homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => v.toFixed(2)} />
-              <StatRow label="Gol Farkı / Maç" homeVal={feats.home.goal_diff_per_game} awayVal={feats.away.goal_diff_per_game}
-                homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v > 0 ? "+" : "") + v.toFixed(2)} />
-              <StatRow label="Hücum Gücü" homeVal={feats.home.attack_index} awayVal={feats.away.attack_index}
-                homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
-              <StatRow label="Savunma Gücü" homeVal={feats.home.defense_index} awayVal={feats.away.defense_index}
-                homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
-            </div>
-          </div>
 
-          {/* Edge bars */}
-          <div className="mt-5 space-y-3 border-t pt-4">
-            <EdgeBar label="Güç Farkı" value={feats.strength_edge} leftLabel={awayTeam} rightLabel={homeTeam} />
-            <EdgeBar label="Form Farkı" value={feats.form_edge} leftLabel={awayTeam} rightLabel={homeTeam} />
+            {/* Edge bars */}
+            <div className="mt-5 space-y-3 border-t pt-4">
+              <EdgeBar label="Güç Farkı" value={feats.strength_edge} leftLabel={awayTeam} rightLabel={homeTeam} />
+              <EdgeBar label="Form Farkı" value={feats.form_edge} leftLabel={awayTeam} rightLabel={homeTeam} />
+            </div>
           </div>
-        </div>
+        </SubscriberGate>
       ) : (
         <div className="bg-white rounded-xl shadow p-5">
           <h2 className="text-sm font-bold text-gray-700 mb-1">Takım Karşılaştırması</h2>
@@ -449,44 +452,46 @@ export default function MatchDetailPage() {
 
       {/* ── Score history ─────────────────────────────────────────────────────── */}
       {history.length > 0 && (
-        <div className="bg-white rounded-xl shadow p-5">
-          <h2 className="text-sm font-bold text-gray-700 mb-3">Skor Değişim Geçmişi</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[480px]">
-              <thead>
-                <tr className="text-gray-400 border-b">
-                  <th className="text-left pb-2 font-medium">Tarih / Saat</th>
-                  <th className="text-center pb-2 font-medium text-blue-500">1</th>
-                  <th className="text-center pb-2 font-medium text-amber-500">X</th>
-                  <th className="text-center pb-2 font-medium text-red-500">2</th>
-                  <th className="text-center pb-2 font-medium">Birincil</th>
-                  <th className="text-center pb-2 font-medium">Öneri</th>
-                  <th className="text-center pb-2 font-medium">Güven</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {history.map((h: any, i: number) => {
-                  const prevPick = history[i + 1]?.primary_pick;
-                  const changed = prevPick && prevPick !== h.primary_pick;
-                  return (
-                    <tr key={i} className={`${i === 0 ? "font-semibold" : "text-gray-500"} ${changed ? "bg-amber-50" : ""}`}>
-                      <td className="py-1.5">
-                        {new Date(h.created_at).toLocaleString("tr-TR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                        {changed && <span className="ml-1 text-amber-500 text-[10px]">↺ değişti</span>}
-                      </td>
-                      <td className="text-center text-blue-500">{(h.p1 * 100).toFixed(0)}%</td>
-                      <td className="text-center text-amber-500">{(h.px * 100).toFixed(0)}%</td>
-                      <td className="text-center text-red-500">{(h.p2 * 100).toFixed(0)}%</td>
-                      <td className="text-center font-bold">{h.primary_pick}</td>
-                      <td className="text-center">{h.coverage_pick ?? "—"}</td>
-                      <td className="text-center">{h.confidence_score != null ? `%${h.confidence_score.toFixed(0)}` : "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <SubscriberGate>
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-sm font-bold text-gray-700 mb-3">Skor Değişim Geçmişi</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs min-w-[480px]">
+                <thead>
+                  <tr className="text-gray-400 border-b">
+                    <th className="text-left pb-2 font-medium">Tarih / Saat</th>
+                    <th className="text-center pb-2 font-medium text-blue-500">1</th>
+                    <th className="text-center pb-2 font-medium text-amber-500">X</th>
+                    <th className="text-center pb-2 font-medium text-red-500">2</th>
+                    <th className="text-center pb-2 font-medium">Birincil</th>
+                    <th className="text-center pb-2 font-medium">Öneri</th>
+                    <th className="text-center pb-2 font-medium">Güven</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {history.map((h: any, i: number) => {
+                    const prevPick = history[i + 1]?.primary_pick;
+                    const changed = prevPick && prevPick !== h.primary_pick;
+                    return (
+                      <tr key={i} className={`${i === 0 ? "font-semibold" : "text-gray-500"} ${changed ? "bg-amber-50" : ""}`}>
+                        <td className="py-1.5">
+                          {new Date(h.created_at).toLocaleString("tr-TR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                          {changed && <span className="ml-1 text-amber-500 text-[10px]">↺ değişti</span>}
+                        </td>
+                        <td className="text-center text-blue-500">{(h.p1 * 100).toFixed(0)}%</td>
+                        <td className="text-center text-amber-500">{(h.px * 100).toFixed(0)}%</td>
+                        <td className="text-center text-red-500">{(h.p2 * 100).toFixed(0)}%</td>
+                        <td className="text-center font-bold">{h.primary_pick}</td>
+                        <td className="text-center">{h.coverage_pick ?? "—"}</td>
+                        <td className="text-center">{h.confidence_score != null ? `%${h.confidence_score.toFixed(0)}` : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        </SubscriberGate>
       )}
     </div>
   );

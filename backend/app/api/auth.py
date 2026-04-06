@@ -3,7 +3,9 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from passlib.context import CryptContext
 from jose import jwt
-from pydantic import BaseModel
+from typing import Optional
+
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -37,6 +39,27 @@ def create_access_token(user_id: int) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
     payload = {"sub": str(user_id), "exp": expire}
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+    display_name: Optional[str] = None
+
+
+@router.post("/register", response_model=TokenResponse)
+def register(body: RegisterRequest, db: Session = Depends(get_db)):
+    if db.query(models.User).filter_by(email=body.email).first():
+        raise HTTPException(status_code=400, detail="Bu e-posta zaten kayıtlı")
+    user = models.User(
+        email=body.email,
+        hashed_password=hash_password(body.password),
+        display_name=body.display_name,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return TokenResponse(access_token=create_access_token(user.id))
 
 
 @router.post("/login", response_model=TokenResponse)

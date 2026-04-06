@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
 
+    # Stripe
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_id: str = ""
+    stripe_success_url: str = "http://localhost:3000/hesap?success=1"
+    stripe_cancel_url: str = "http://localhost:3000/uye-ol?cancelled=1"
+
     # App
     environment: str = "development"
     log_level: str = "INFO"
