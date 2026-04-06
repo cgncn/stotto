@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import pools, admin, auth
+from app.api import pools, admin, auth, users
 
 app = FastAPI(
     title="STOTTO API",
@@ -26,3 +26,4 @@ def health_check():
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(pools.router, prefix="/weekly-pools", tags=["pools"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
+app.include_router(users.router, prefix="/users", tags=["users"])
