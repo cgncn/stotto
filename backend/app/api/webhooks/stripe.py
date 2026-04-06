@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from sqlalchemy.orm import Session
@@ -82,7 +83,6 @@ async def stripe_webhook(
             raise HTTPException(status_code=400, detail="Invalid signature") from exc
     else:
         # Dev mode: no secret configured, parse raw payload
-        import json
         event = json.loads(payload)
 
     event_id = event.get("id", "")
@@ -91,14 +91,18 @@ async def stripe_webhook(
 
     event_type = event.get("type", "")
     handler = EVENT_HANDLERS.get(event_type)
-    if handler:
-        handler(event["data"]["object"], db)
+    try:
+        if handler:
+            handler(event["data"]["object"], db)
 
-    log = models.SubscriptionLog(
-        stripe_event_id=event_id or f"unknown-{event_type}",
-        event_type=event_type,
-        payload_json=dict(event),
-    )
-    db.add(log)
-    db.commit()
+        log = models.SubscriptionLog(
+            stripe_event_id=event_id or f"unknown-{event_type}",
+            event_type=event_type,
+            payload_json=dict(event),
+        )
+        db.add(log)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {"status": "ok"}
