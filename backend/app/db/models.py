@@ -350,7 +350,7 @@ class ScoreChangeLog(Base):
 
 class UserCoupon(Base):
     __tablename__ = "user_coupons"
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     weekly_pool_id = Column(Integer, ForeignKey("weekly_pools.id"), nullable=False)
     scenario_type = Column(String(20))
@@ -362,7 +362,7 @@ class UserCoupon(Base):
 
 class UserCouponPerformance(Base):
     __tablename__ = "user_coupon_performance"
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_coupon_id = Column(Integer, ForeignKey("user_coupons.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     week_code = Column(String(20), nullable=False)
@@ -375,7 +375,7 @@ class UserCouponPerformance(Base):
 
 class SubscriptionLog(Base):
     __tablename__ = "subscription_log"
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     stripe_event_id = Column(String(100), nullable=False, unique=True)
     event_type = Column(String(80), nullable=False)
