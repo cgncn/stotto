@@ -10,7 +10,8 @@ interface Props {
 }
 
 export function SubscriberGate({ children, fallback }: Props) {
-  const { isSubscriber } = useSubscription();
+  const { isSubscriber, loading } = useSubscription();
+  if (loading) return null;
   if (isSubscriber) return <>{children}</>;
   return <>{fallback ?? <UpgradeBanner />}</>;
 }

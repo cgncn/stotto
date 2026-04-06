@@ -24,6 +24,7 @@ interface AuthState {
   token: string | null;
   user: UserProfile | null;
   isSubscriber: boolean;
+  loading: boolean;
   login: (token: string) => void;
   logout: () => void;
 }
@@ -32,6 +33,7 @@ const AuthContext = createContext<AuthState>({
   token: null,
   user: null,
   isSubscriber: false,
+  loading: false,
   login: () => {},
   logout: () => {},
 });
@@ -39,6 +41,7 @@ const AuthContext = createContext<AuthState>({
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   const fetchProfile = async (t: string) => {
     try {
@@ -49,6 +52,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem(TOKEN_KEY);
       setToken(null);
       setUser(null);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -57,6 +62,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (stored) {
       setToken(stored);
       fetchProfile(stored);
+    } else {
+      setLoading(false);
     }
   }, []);
 
@@ -70,13 +77,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(TOKEN_KEY);
     setToken(null);
     setUser(null);
+    setLoading(false);
   };
 
   const isSubscriber =
     user?.role === "SUBSCRIBER" || user?.role === "ADMIN";
 
   return (
-    <AuthContext.Provider value={{ token, user, isSubscriber, login, logout }}>
+    <AuthContext.Provider value={{ token, user, isSubscriber, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -87,6 +95,6 @@ export function useAuth() {
 }
 
 export function useSubscription() {
-  const { isSubscriber } = useContext(AuthContext);
-  return { isSubscriber };
+  const { isSubscriber, loading } = useContext(AuthContext);
+  return { isSubscriber, loading };
 }
