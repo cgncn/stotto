@@ -152,7 +152,7 @@ def checkout_callback(
                 user.iyzico_subscription_ref = sub_ref
                 user.subscription_status = "active"
                 db.commit()
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             logger.error("Callback DB update failed: %s", exc)
             db.rollback()
 
