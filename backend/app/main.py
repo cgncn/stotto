@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import pools, admin, auth, users, subscriptions
-from app.api.webhooks import stripe as stripe_webhook
+from app.api.webhooks import iyzico as iyzico_webhook
 
 app = FastAPI(
     title="STOTTO API",
@@ -29,4 +29,4 @@ app.include_router(pools.router, prefix="/weekly-pools", tags=["pools"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(subscriptions.router, prefix="/subscriptions", tags=["subscriptions"])
-app.include_router(stripe_webhook.router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(iyzico_webhook.router, prefix="/webhooks/iyzico", tags=["webhooks"])
