@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { authedPost } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import StaticMatchPreview from "@/components/StaticMatchPreview";
 
 const FREE_FEATURES = [
   { label: "Haftalık maç listesi", available: true },
@@ -168,6 +169,9 @@ export default function UyeOlPage() {
           </div>
         )}
       </div>
+
+      {/* Match preview — shown to all users */}
+      <StaticMatchPreview />
     </div>
   );
 }
