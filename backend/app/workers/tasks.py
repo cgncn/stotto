@@ -112,13 +112,26 @@ def settle_user_coupons(weekly_pool_id: int, db) -> None:
 # ── Weekly import ──────────────────────────────────────────────────────────────
 
 @celery_app.task(name="app.workers.tasks.task_weekly_import", bind=True, max_retries=3)
-def task_weekly_import(self, week_code: str, fixture_external_ids: list[int]):
+def task_weekly_import(self, week_code: str, fixture_external_ids: list[int] | None = None, fixtures_data: list[dict] | None = None):
     """
     Import 15 fixtures for the given week.
-    Creates weekly_pool + weekly_pool_matches, fetches initial snapshots,
+    Creates weekly_pool + weekly_pool_matches, fetches initial snapshots (odds, injuries, H2H),
     then chains into baseline scoring.
+
+    Args:
+        week_code: e.g. "2026-W15"
+        fixture_external_ids: simple list of API-Football fixture IDs (legacy)
+        fixtures_data: list of {external_id, admin_flags} dicts (rich format)
     """
-    logger.info("Weekly import started: week=%s, fixtures=%s", week_code, fixture_external_ids)
+    from app.features.rivalries import is_derby as check_derby
+
+    # Normalise inputs
+    if fixtures_data:
+        items = [(d["external_id"], d.get("admin_flags", {})) for d in fixtures_data]
+    else:
+        items = [(eid, {}) for eid in (fixture_external_ids or [])]
+
+    logger.info("Weekly import started: week=%s, fixtures=%s", week_code, [i[0] for i in items])
 
     with SessionLocal() as db:
         # Idempotent: re-use existing pool if already created
@@ -130,7 +143,7 @@ def task_weekly_import(self, week_code: str, fixture_external_ids: list[int]):
 
         adapter = APIFootballAdapter(db)
 
-        for seq, ext_id in enumerate(fixture_external_ids, start=1):
+        for seq, (ext_id, admin_flags) in enumerate(items, start=1):
             if seq > 1:
                 time.sleep(6)  # Stay within 10 req/min rate limit
 
@@ -142,6 +155,12 @@ def task_weekly_import(self, week_code: str, fixture_external_ids: list[int]):
                 continue
 
             fixture = adapter.upsert_fixture(raw)
+            db.flush()
+
+            # Detect derby via config
+            home_ext = fixture.home_team.external_provider_id
+            away_ext = fixture.away_team.external_provider_id
+            derby_flag = check_derby(home_ext, away_ext)
 
             # Idempotent pool match
             pm = db.query(models.WeeklyPoolMatch).filter_by(
@@ -155,8 +174,17 @@ def task_weekly_import(self, week_code: str, fixture_external_ids: list[int]):
                     fixture_external_id=ext_id,
                     kickoff_at=fixture.kickoff_at,
                     status=models.MatchStatus.pending,
+                    is_derby=derby_flag,
+                    admin_flags=admin_flags,
                 )
                 db.add(pm)
+                db.flush()
+            else:
+                # Update admin flags if changed
+                if not pm.is_derby and derby_flag:
+                    pm.is_derby = True
+                if admin_flags:
+                    pm.admin_flags = {**(pm.admin_flags or {}), **admin_flags}
 
             # Initial snapshots: odds + injuries
             try:
@@ -168,6 +196,18 @@ def task_weekly_import(self, week_code: str, fixture_external_ids: list[int]):
                 adapter.fetch_injuries(ext_id)
             except APIFootballError as exc:
                 logger.warning("Injuries unavailable for fixture %d: %s", ext_id, exc)
+
+            # H2H snapshot
+            time.sleep(6)
+            try:
+                adapter.fetch_h2h(
+                    home_ext_id=home_ext,
+                    away_ext_id=away_ext,
+                    fixture_db_id=fixture.id,
+                )
+                logger.info("H2H fetched for fixture %d (%d vs %d)", ext_id, home_ext, away_ext)
+            except APIFootballError as exc:
+                logger.warning("H2H unavailable for fixture %d: %s", ext_id, exc)
 
         db.commit()
 
