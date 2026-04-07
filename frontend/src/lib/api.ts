@@ -75,6 +75,9 @@ export interface PoolMatch {
   home_team: string;
   away_team: string;
   latest_score: MatchScore | null;
+  is_derby: boolean;
+  sharp_money_flag: boolean | null;
+  post_intl_break: boolean | null;
 }
 
 export interface PoolSummary {
@@ -98,6 +101,7 @@ export interface TeamFeatures {
 }
 
 export interface MatchFeatures {
+  // v1
   strength_edge: number | null;
   form_edge: number | null;
   home_advantage: number | null;
@@ -113,9 +117,63 @@ export interface MatchFeatures {
   lineup_penalty_home: number | null;
   lineup_penalty_away: number | null;
   lineup_certainty: number | null;
+  // v2: H2H
+  h2h_home_win_rate: number | null;
+  h2h_away_win_rate: number | null;
+  h2h_draw_rate: number | null;
+  h2h_venue_home_win_rate: number | null;
+  h2h_bogey_flag: boolean | null;
+  h2h_sample_size: number | null;
+  // v2: schedule
+  rest_days_home_actual: number | null;
+  rest_days_away_actual: number | null;
+  post_intl_break_home: boolean | null;
+  post_intl_break_away: boolean | null;
+  congestion_risk_home: boolean | null;
+  congestion_risk_away: boolean | null;
+  // v2: derby
+  is_derby: boolean | null;
+  derby_confidence_suppressor: number | null;
+  // v2: odds movement
+  opening_odds_home: number | null;
+  opening_odds_away: number | null;
+  opening_odds_draw: number | null;
+  odds_delta_home: number | null;
+  sharp_money_signal: number | null;
+  // v2: form
+  away_form_home: number | null;
+  away_form_away: number | null;
+  // v2: xG
+  xg_proxy_home: number | null;
+  xg_proxy_away: number | null;
+  xg_luck_home: number | null;
+  xg_luck_away: number | null;
+  lucky_form_home: boolean | null;
+  lucky_form_away: boolean | null;
+  unlucky_form_home: boolean | null;
+  unlucky_form_away: boolean | null;
+  // v2: motivation
+  motivation_home: number | null;
+  motivation_away: number | null;
+  points_above_relegation_home: number | null;
+  points_above_relegation_away: number | null;
+  points_to_top4_home: number | null;
+  points_to_top4_away: number | null;
+  points_to_top6_home: number | null;
+  points_to_top6_away: number | null;
+  points_to_title_home: number | null;
+  points_to_title_away: number | null;
+  long_unbeaten_home: boolean | null;
+  long_unbeaten_away: boolean | null;
+  // v2: absences
+  key_attacker_absent_home: boolean | null;
+  key_attacker_absent_away: boolean | null;
+  key_defender_absent_home: boolean | null;
+  key_defender_absent_away: boolean | null;
   home: TeamFeatures;
   away: TeamFeatures;
   odds: { home: number | null; draw: number | null; away: number | null };
+  odds_snapshots: { snapshot_time: string; home: number | null; draw: number | null; away: number | null }[];
   market: Record<string, unknown>;
 }
 

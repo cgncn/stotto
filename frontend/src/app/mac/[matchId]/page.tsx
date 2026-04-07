@@ -4,16 +4,17 @@ import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { buildExplanation, safeVal, fmt } from "@/lib/explanation";
+import { buildExplanation, safeVal } from "@/lib/explanation";
 import { SkeletonCard, SkeletonBlock } from "@/components/Skeleton";
 import ConfidenceRing from "@/components/ConfidenceRing";
 import { SubscriberGate } from "@/components/SubscriberGate";
+import type { MatchFeatures } from "@/lib/api";
 
 const RadarChart = dynamic(() => import("@/components/RadarChart"), { ssr: false });
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 
 const BADGE: Record<string, string> = {
   "1":   "bg-blue-100 text-blue-800 border-blue-200",
@@ -31,6 +32,24 @@ const H2H_PILL: Record<string, string> = {
   L: "bg-red-100 text-red-800",
   "?": "bg-gray-100 text-gray-500",
 };
+
+const REASON_LABEL: Record<string, string> = {
+  HOME_STRENGTH: "Ev güçlü", AWAY_STRENGTH: "Dep. güçlü",
+  HOME_FORM: "Ev formda", AWAY_FORM: "Dep. formda",
+  DRAW_RISK: "Beraberlik riski", HOME_ABSENCE: "Ev eksik",
+  AWAY_ABSENCE: "Dep. eksik", MARKET_ALIGNED: "Piyasa uyumlu",
+  HIGH_VOLATILITY: "Yüksek volatilite", TRIPLE_RISK: "Üçlü gerekli",
+  DERBY_FLAG: "Derby maçı", H2H_BOGEY: "Bogey takım",
+  H2H_HOME_DOMINANT: "H2H ev üstün", POST_INTL_BREAK: "Milli ara",
+  SHARP_MONEY_AWAY: "Sharp → Dep", SHARP_MONEY_HOME: "Sharp → Ev",
+  LUCKY_FORM_HOME: "Ev şanslı form", LUCKY_FORM_AWAY: "Dep. şanslı form",
+  UNLUCKY_FORM_HOME: "Ev şanssız form", UNLUCKY_FORM_AWAY: "Dep. şanssız form",
+  HIGH_MOTIVATION_HOME: "Ev yüksek motivasyon", HIGH_MOTIVATION_AWAY: "Dep. yüksek motivasyon",
+  CONGESTION_RISK_AWAY: "Dep. yoğun program", KEY_ATTACKER_ABSENT: "Anahtar forvet yok",
+  KEY_DEFENDER_ABSENT: "Anahtar defans yok", LONG_UNBEATEN_HOME: "Uzun yenilmezlik (ev)",
+};
+
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function ProbBar({ p1, px, p2, primary }: { p1: number; px: number; p2: number; primary: string }) {
   return (
@@ -62,7 +81,6 @@ function Gauge({ label, value, description, invert = false }: {
   const display = invert && raw != null ? 1 - raw : raw;
   const pct = display != null ? Math.max(0, Math.min(100, display * 100)) : null;
   const color = pct == null ? "bg-gray-200" : pct > 65 ? "bg-green-500" : pct > 38 ? "bg-amber-400" : "bg-red-400";
-
   return (
     <div className="bg-gray-50 rounded-lg p-3">
       <div className="flex justify-between items-baseline mb-1">
@@ -87,7 +105,6 @@ function StatRow({ label, homeVal, awayVal, homeLabel, awayLabel, fmt: fmtFn = (
   if (hv == null && av == null) return null;
   const max = Math.max(hv ?? 0, av ?? 0, 0.001);
   const homeWins = hv != null && av != null ? (higherIsBetter ? hv >= av : hv <= av) : null;
-
   return (
     <div className="py-2 border-b border-gray-50 last:border-0">
       <div className="flex justify-between text-xs text-gray-400 mb-1">
@@ -101,22 +118,15 @@ function StatRow({ label, homeVal, awayVal, homeLabel, awayLabel, fmt: fmtFn = (
       </div>
       <div className="flex gap-1">
         <div className="flex-1 flex justify-end">
-          {hv != null && (
-            <div className={`h-1.5 rounded-full ${homeWins === true ? "bg-blue-400" : "bg-gray-200"}`}
-              style={{ width: `${(hv / max) * 100}%` }} />
-          )}
+          {hv != null && <div className={`h-1.5 rounded-full ${homeWins === true ? "bg-blue-400" : "bg-gray-200"}`} style={{ width: `${(hv / max) * 100}%` }} />}
         </div>
         <div className="w-1" />
         <div className="flex-1">
-          {av != null && (
-            <div className={`h-1.5 rounded-full ${homeWins === false ? "bg-red-400" : "bg-gray-200"}`}
-              style={{ width: `${(av / max) * 100}%` }} />
-          )}
+          {av != null && <div className={`h-1.5 rounded-full ${homeWins === false ? "bg-red-400" : "bg-gray-200"}`} style={{ width: `${(av / max) * 100}%` }} />}
         </div>
       </div>
       <div className="flex justify-between text-[10px] text-gray-300 mt-0.5">
-        <span>{homeLabel}</span>
-        <span>{awayLabel}</span>
+        <span>{homeLabel}</span><span>{awayLabel}</span>
       </div>
     </div>
   );
@@ -128,7 +138,6 @@ function EdgeBar({ label, value, leftLabel, rightLabel }: {
   const v = value ?? 0;
   const halfPct = Math.min(50, Math.abs(v) * 60);
   const isHome = v >= 0;
-
   return (
     <div>
       <div className="flex justify-between text-[10px] text-gray-400 mb-1">
@@ -138,21 +147,88 @@ function EdgeBar({ label, value, leftLabel, rightLabel }: {
       </div>
       <div className="relative h-2.5 bg-gray-100 rounded-full overflow-hidden">
         <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300" />
-        <div
-          className={`absolute inset-y-0 ${isHome ? "bg-blue-400" : "bg-red-400"} rounded-full`}
-          style={isHome
-            ? { left: "50%", width: `${halfPct}%` }
-            : { right: "50%", width: `${halfPct}%` }}
-        />
+        <div className={`absolute inset-y-0 ${isHome ? "bg-blue-400" : "bg-red-400"} rounded-full`}
+          style={isHome ? { left: "50%", width: `${halfPct}%` } : { right: "50%", width: `${halfPct}%` }} />
       </div>
       <p className="text-center text-[10px] text-gray-400 mt-0.5">
-        {Math.abs(v) < 0.01
-          ? "Dengeli"
-          : isHome
+        {Math.abs(v) < 0.01 ? "Dengeli" : isHome
           ? `${rightLabel} +${(v * 100).toFixed(0)} puan`
           : `${leftLabel} +${(Math.abs(v) * 100).toFixed(0)} puan`}
       </p>
     </div>
+  );
+}
+
+// Horizontal win-rate bar for H2H
+function H2HRateBar({ homeRate, drawRate, awayRate, homeTeam, awayTeam }: {
+  homeRate: number; drawRate: number; awayRate: number; homeTeam: string; awayTeam: string;
+}) {
+  const h = Math.round(homeRate * 100);
+  const d = Math.round(drawRate * 100);
+  const a = Math.round(awayRate * 100);
+  return (
+    <div>
+      <div className="flex h-5 rounded overflow-hidden text-white text-[10px] font-bold">
+        <div className="bg-blue-500 flex items-center justify-center" style={{ width: `${h}%` }}>{h > 12 && `${h}%`}</div>
+        <div className="bg-amber-400 flex items-center justify-center" style={{ width: `${d}%` }}>{d > 8 && `${d}%`}</div>
+        <div className="bg-red-500 flex items-center justify-center" style={{ width: `${a}%` }}>{a > 12 && `${a}%`}</div>
+      </div>
+      <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+        <span className="text-blue-600 font-medium">{homeTeam}</span>
+        <span>Beraberlik</span>
+        <span className="text-red-500 font-medium">{awayTeam}</span>
+      </div>
+    </div>
+  );
+}
+
+// Motivation bar with sub-label
+function MotivationBar({ score, label, color }: { score: number | null; label: string; color: string }) {
+  if (score == null) return (
+    <div className="flex-1">
+      <div className="text-xs text-gray-400 mb-1">{label}</div>
+      <div className="h-2 bg-gray-100 rounded" />
+      <div className="text-[10px] text-gray-300 mt-0.5">Veri yok</div>
+    </div>
+  );
+  const pct = Math.round(score * 100);
+  return (
+    <div className="flex-1">
+      <div className="flex justify-between text-xs mb-1">
+        <span className="text-gray-500">{label}</span>
+        <span className={`font-bold ${color}`}>{pct}%</span>
+      </div>
+      <div className="h-2 bg-gray-100 rounded overflow-hidden">
+        <div className={`h-full rounded transition-all ${color === "text-blue-700" ? "bg-blue-500" : "bg-red-500"}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function motivationSublabel(f: MatchFeatures, side: "home" | "away"): string {
+  const par = (pts_above_rel: number | null, pts_title: number | null, pts_top4: number | null, pts_top6: number | null) => {
+    if (pts_above_rel != null && pts_above_rel <= 3) return `Düşme hattına ${pts_above_rel} puan`;
+    if (pts_title != null && pts_title <= 6) return `Şampiyonluğa ${pts_title} puan`;
+    if (pts_top4 != null && pts_top4 <= 4) return `4. sıraya ${pts_top4} puan`;
+    if (pts_top6 != null && pts_top6 <= 3) return `6. sıraya ${pts_top6} puan`;
+    return "Orta sıra";
+  };
+  if (side === "home") return par(f.points_above_relegation_home, f.points_to_title_home, f.points_to_top4_home, f.points_to_top6_home);
+  return par(f.points_above_relegation_away, f.points_to_title_away, f.points_to_top4_away, f.points_to_top6_away);
+}
+
+// Sharp money arrow indicator
+function SharpMoneyIndicator({ signal }: { signal: number | null }) {
+  if (signal == null) return null;
+  const abs = Math.abs(signal);
+  if (abs < 0.3) return <span className="text-xs text-gray-400">Nötr</span>;
+  const toward = signal > 0 ? "Deplasman" : "Ev Sahibi";
+  const color = signal > 0 ? "text-red-600" : "text-blue-700";
+  const strength = abs > 0.7 ? "Güçlü" : "Orta";
+  return (
+    <span className={`text-xs font-semibold ${color}`}>
+      {strength} → {toward} {signal > 0 ? "→" : "←"}
+    </span>
   );
 }
 
@@ -164,6 +240,7 @@ export default function MatchDetailPage() {
   const poolId = searchParams.get("pool");
   const matchId = params.matchId;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [match, setMatch] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -186,41 +263,69 @@ export default function MatchDetailPage() {
   if (loading) return (
     <div className="max-w-3xl mx-auto space-y-4">
       <div className="h-4 w-24 bg-gray-200 rounded animate-pulse" />
-      <SkeletonCard />
-      <SkeletonCard />
-      <SkeletonCard />
+      <SkeletonCard /><SkeletonCard /><SkeletonCard />
     </div>
   );
 
   const score = match.latest_score;
-  const feats = match.features;
+  const feats: MatchFeatures | null = match.features;
   const homeTeam: string = match.home_team;
   const awayTeam: string = match.away_team;
-  const h2h: any[] = match.h2h ?? [];
-  const history: any[] = match.score_history ?? [];
+  const h2h: unknown[] = match.h2h ?? [];
+  const history: unknown[] = match.score_history ?? [];
 
   const cov = score?.recommended_coverage ?? score?.primary_pick ?? "?";
   const badgeCls = BADGE[cov] ?? "bg-gray-100 text-gray-700";
   const exp = buildExplanation(feats, score, homeTeam, awayTeam);
 
-  // Radar dimensions
+  // Derived flags
+  const isDerby = feats?.is_derby || false;
+  const hasContext = feats && (feats.rest_days_home_actual != null || feats.post_intl_break_home != null);
+  const hasMotivation = feats && (feats.motivation_home != null || feats.motivation_away != null);
+  const hasOddsMovement = feats && feats.opening_odds_home != null;
+  const hasXG = feats && feats.xg_proxy_home != null;
+  const hasH2HStats = feats && feats.h2h_sample_size != null && (feats.h2h_sample_size ?? 0) > 0;
+
+  // Opening vs current odds for movement
+  const openingOdds = feats ? { home: feats.opening_odds_home, draw: feats.opening_odds_draw, away: feats.opening_odds_away } : null;
+  const currentOdds = feats?.odds ?? null;
+
+  // Radar: 8 dimensions (added Motivasyon + Dep. Form)
   const radarDims = feats ? [
-    { label: "Güç", home: feats.home?.strength_score ?? 0.5, away: feats.away?.strength_score ?? 0.5 },
-    { label: "Form", home: feats.home?.form_score ?? 0.5, away: feats.away?.form_score ?? 0.5 },
-    { label: "Hücum", home: feats.home?.attack_index ?? 0.5, away: feats.away?.attack_index ?? 0.5 },
-    { label: "Savunma", home: feats.home?.defense_index ?? 0.5, away: feats.away?.defense_index ?? 0.5 },
-    { label: "Bera. Riski", home: feats.draw_tendency ?? 0.5, away: feats.draw_tendency ?? 0.5 },
-    { label: "Piyasa", home: feats.market_support ?? 0.33, away: feats.market?.implied_p2 ?? 0.33 },
+    { label: "Güç",        home: feats.home?.strength_score ?? 0.5,  away: feats.away?.strength_score ?? 0.5 },
+    { label: "Form",       home: feats.home?.form_score ?? 0.5,       away: feats.away?.form_score ?? 0.5 },
+    { label: "Hücum",      home: feats.home?.attack_index ?? 0.5,     away: feats.away?.attack_index ?? 0.5 },
+    { label: "Savunma",    home: feats.home?.defense_index ?? 0.5,    away: feats.away?.defense_index ?? 0.5 },
+    { label: "Motivasyon", home: feats.motivation_home ?? 0.3,        away: feats.motivation_away ?? 0.3 },
+    { label: "Dep. Form",  home: feats.away_form_home ?? 0.4,         away: feats.away_form_away ?? 0.4 },
+    { label: "Bera. Riski",home: feats.draw_tendency ?? 0.5,          away: feats.draw_tendency ?? 0.5 },
+    { label: "Piyasa",     home: feats.market_support ?? 0.33,        away: 1 - (feats.market_support ?? 0.33) },
   ] : [];
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
       <Link href="/" className="text-sm text-blue-600 hover:underline block">← Haftalık Tablo</Link>
 
-      {/* ── Header card ─────────────────────────────────────────────────────── */}
+      {/* ── Derby alert ──────────────────────────────────────────────────────── */}
+      {isDerby && (
+        <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex gap-3 items-start">
+          <span className="text-2xl shrink-0">🔥</span>
+          <div>
+            <p className="font-bold text-orange-800 text-sm">Derby Maçı</p>
+            <p className="text-xs text-orange-600 mt-0.5">
+              Bu maç tarihi bir rekabet olarak işaretlendi. Derby maçlarında model güven skoru %25 baskılanır — sürpriz olasılığı yüksektir.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Header card ──────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl shadow p-5">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-mono text-gray-400">Maç {match.sequence_no}</span>
+        <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-gray-400">Maç {match.sequence_no}</span>
+            {isDerby && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200">DERBY</span>}
+          </div>
           <span className={`text-xs px-2 py-0.5 rounded font-medium ${match.is_locked ? "bg-gray-100 text-gray-500" : "bg-green-100 text-green-700"}`}>
             {match.is_locked ? `Kilitli · ${match.result ?? ""}` : "Açık"}
           </span>
@@ -250,7 +355,7 @@ export default function MatchDetailPage() {
               <div className="flex items-center gap-2">
                 <ConfidenceRing score={score.confidence_score} pick={score.primary_pick} size={52} />
                 <div>
-                  <p className="text-xs text-gray-400">Güven</p>
+                  <p className="text-xs text-gray-400">Güven{isDerby && <span className="ml-1 text-orange-500 text-[10px]">×0.75 derby</span>}</p>
                   <p className={`text-xl font-black ${(score.confidence_score ?? 0) >= 55 ? "text-green-600" : (score.confidence_score ?? 0) >= 30 ? "text-amber-600" : "text-red-500"}`}>
                     %{(score.confidence_score ?? 0).toFixed(0)}
                   </p>
@@ -274,7 +379,7 @@ export default function MatchDetailPage() {
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {score.reason_codes.map((code: string) => (
                   <span key={code} className="bg-blue-50 text-blue-700 text-xs px-2.5 py-0.5 rounded-full border border-blue-100">
-                    {code === "HOME_STRENGTH" ? "Ev güçlü" : code === "AWAY_STRENGTH" ? "Dep. güçlü" : code === "HOME_FORM" ? "Ev formda" : code === "AWAY_FORM" ? "Dep. formda" : code === "DRAW_RISK" ? "Beraberlik riski" : code === "HOME_ABSENCE" ? "Ev eksik" : code === "AWAY_ABSENCE" ? "Dep. eksik" : code === "MARKET_ALIGNED" ? "Piyasa uyumlu" : code === "HIGH_VOLATILITY" ? "Yüksek volatilite" : code === "TRIPLE_RISK" ? "Üçlü gerekli" : code}
+                    {REASON_LABEL[code] ?? code}
                   </span>
                 ))}
               </div>
@@ -285,48 +390,156 @@ export default function MatchDetailPage() {
         )}
       </div>
 
-      {/* ── Why this recommendation ─────────────────────────────────────────── */}
-      {score && (
-        <div className="bg-white rounded-xl shadow p-5">
-          <h2 className="text-sm font-bold text-gray-700 mb-3">Neden Bu Öneri?</h2>
-          <div className="space-y-3">
-            <div className="flex gap-3 items-start">
-              <span className="text-lg shrink-0">🎯</span>
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Birincil Sinyal</p>
-                <p className="text-sm text-gray-800">{exp.primary_reason}</p>
+      {/* ── Context strip: rest days / break / congestion ─────────────────────── */}
+      {hasContext && (
+        <div className="bg-white rounded-xl shadow p-4">
+          <h2 className="text-sm font-bold text-gray-700 mb-3">Program & Bağlam</h2>
+          <div className="grid grid-cols-2 gap-3">
+            {/* Rest days */}
+            <div>
+              <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-2">Dinlenme Süresi</p>
+              <div className="space-y-2">
+                {(["home", "away"] as const).map(side => {
+                  const days = side === "home" ? feats?.rest_days_home_actual : feats?.rest_days_away_actual;
+                  const team = side === "home" ? homeTeam : awayTeam;
+                  const color = days == null ? "bg-gray-200" : days < 4 ? "bg-red-400" : days < 7 ? "bg-amber-400" : "bg-green-400";
+                  return (
+                    <div key={side} className="flex items-center gap-2">
+                      <span className={`text-[10px] font-bold px-1.5 rounded ${side === "home" ? "text-blue-600 bg-blue-50" : "text-red-500 bg-red-50"}`}>{team.slice(0, 8)}</span>
+                      <div className="flex-1 h-2 bg-gray-100 rounded overflow-hidden">
+                        <div className={`h-full ${color}`} style={{ width: `${Math.min(100, ((days ?? 7) / 14) * 100)}%` }} />
+                      </div>
+                      <span className="text-xs font-mono text-gray-600 w-12 text-right">{days != null ? `${Math.round(days)} gün` : "—"}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-            <div className="flex gap-3 items-start">
-              <span className="text-lg shrink-0">⚠️</span>
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Risk Faktörü</p>
-                <p className="text-sm text-gray-800">{exp.risk_factor}</p>
-              </div>
-            </div>
-            <div className="flex gap-3 items-start">
-              <span className="text-lg shrink-0">🛡️</span>
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Kapsam Gerekçesi</p>
-                <p className="text-sm text-gray-800">{exp.coverage_rationale}</p>
+            {/* Badges */}
+            <div>
+              <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-2">Uyarılar</p>
+              <div className="flex flex-wrap gap-1.5">
+                {feats?.post_intl_break_home && (
+                  <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-medium">🌍 {homeTeam.slice(0,8)} milli arada</span>
+                )}
+                {feats?.post_intl_break_away && (
+                  <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-medium">🌍 {awayTeam.slice(0,8)} milli arada</span>
+                )}
+                {feats?.congestion_risk_home && (
+                  <span className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium">📅 {homeTeam.slice(0,8)} yoğun program</span>
+                )}
+                {feats?.congestion_risk_away && (
+                  <span className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium">📅 {awayTeam.slice(0,8)} yoğun program</span>
+                )}
+                {feats?.long_unbeaten_home && (
+                  <span className="text-xs px-2 py-1 rounded-full bg-purple-50 text-purple-700 border border-purple-200 font-medium">🏆 {homeTeam.slice(0,8)} uzun seri</span>
+                )}
+                {feats?.long_unbeaten_away && (
+                  <span className="text-xs px-2 py-1 rounded-full bg-purple-50 text-purple-700 border border-purple-200 font-medium">🏆 {awayTeam.slice(0,8)} uzun seri</span>
+                )}
+                {!feats?.post_intl_break_home && !feats?.post_intl_break_away && !feats?.congestion_risk_home && !feats?.congestion_risk_away && !feats?.long_unbeaten_home && !feats?.long_unbeaten_away && (
+                  <span className="text-xs text-gray-400">Program uyarısı yok</span>
+                )}
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Odds ────────────────────────────────────────────────────────────── */}
-      {feats?.odds && (feats.odds.home || feats.odds.draw || feats.odds.away) ? (
+      {/* ── Motivation bars ───────────────────────────────────────────────────── */}
+      {hasMotivation && (
+        <div className="bg-white rounded-xl shadow p-5">
+          <h2 className="text-sm font-bold text-gray-700 mb-4">Motivasyon & Hedef</h2>
+          <div className="flex gap-6">
+            <MotivationBar score={feats!.motivation_home} label={homeTeam} color="text-blue-700" />
+            <MotivationBar score={feats!.motivation_away} label={awayTeam} color="text-red-600" />
+          </div>
+          <div className="mt-3 flex justify-between text-xs text-gray-500">
+            <span className="text-blue-600">{feats && motivationSublabel(feats, "home")}</span>
+            <span className="text-red-500">{feats && motivationSublabel(feats, "away")}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Why this recommendation ───────────────────────────────────────────── */}
+      {score && (
+        <div className="bg-white rounded-xl shadow p-5">
+          <h2 className="text-sm font-bold text-gray-700 mb-3">Neden Bu Öneri?</h2>
+          <div className="space-y-3">
+            {[
+              { icon: "🎯", label: "Birincil Sinyal", text: exp.primary_reason },
+              { icon: "⚠️", label: "Risk Faktörü", text: exp.risk_factor },
+              { icon: "🛡️", label: "Kapsam Gerekçesi", text: exp.coverage_rationale },
+            ].map(({ icon, label, text }) => (
+              <div key={label} className="flex gap-3 items-start">
+                <span className="text-lg shrink-0">{icon}</span>
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">{label}</p>
+                  <p className="text-sm text-gray-800">{text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Odds movement ─────────────────────────────────────────────────────── */}
+      {hasOddsMovement ? (
+        <SubscriberGate>
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-sm font-bold text-gray-700 mb-3">Oran Hareketi & Sharp Money</h2>
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              {(["1", "X", "2"] as const).map((label) => {
+                const openVal = label === "1" ? openingOdds?.home : label === "X" ? openingOdds?.draw : openingOdds?.away;
+                const currVal = label === "1" ? currentOdds?.home : label === "X" ? currentOdds?.draw : currentOdds?.away;
+                const delta = openVal != null && currVal != null ? currVal - openVal : null;
+                const deltaColor = delta == null ? "" : delta > 0.05 ? "text-red-500" : delta < -0.05 ? "text-green-600" : "text-gray-500";
+                return (
+                  <div key={label} className={`border rounded-lg p-3 text-center ${BADGE[label]}`}>
+                    <p className="text-sm font-bold">{label}</p>
+                    <p className="text-xs text-current opacity-60 mt-0.5">Açılış</p>
+                    <p className="text-lg font-extrabold">{openVal != null ? openVal.toFixed(2) : "—"}</p>
+                    {delta != null && (
+                      <p className={`text-xs font-semibold mt-1 ${deltaColor}`}>
+                        {delta > 0 ? "+" : ""}{delta.toFixed(2)} {delta > 0.05 ? "↑" : delta < -0.05 ? "↓" : "~"}
+                      </p>
+                    )}
+                    {currVal != null && <p className="text-[10px] opacity-50 mt-0.5">Güncel: {currVal.toFixed(2)}</p>}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-600 mb-0.5">Sharp Money Sinyali</p>
+                <SharpMoneyIndicator signal={feats?.sharp_money_signal ?? null} />
+              </div>
+              <div className="text-right">
+                <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${(feats?.sharp_money_signal ?? 0) > 0 ? "bg-red-500 ml-auto" : "bg-blue-500"}`}
+                    style={{ width: `${Math.abs(feats?.sharp_money_signal ?? 0) * 100}%`, marginLeft: (feats?.sharp_money_signal ?? 0) > 0 ? "auto" : 0 }}
+                  />
+                </div>
+                <p className="text-[10px] text-gray-400 mt-0.5">← Ev · Dep →</p>
+              </div>
+            </div>
+          </div>
+        </SubscriberGate>
+      ) : (feats?.odds && (feats.odds.home || feats.odds.draw || feats.odds.away)) ? (
         <div className="bg-white rounded-xl shadow p-5">
           <h2 className="text-sm font-bold text-gray-700 mb-3">Bahis Oranları</h2>
           <div className="grid grid-cols-3 gap-3 text-center">
-            {([["1", feats.odds.home, BADGE["1"]], ["X", feats.odds.draw, BADGE["X"]], ["2", feats.odds.away, BADGE["2"]]] as [string, number | null, string][]).map(([label, val, cls]) => (
-              <div key={label} className={`border rounded-lg p-3 ${cls}`}>
-                <p className="text-lg font-bold">{label}</p>
-                <p className="text-2xl font-extrabold mt-1">{val != null ? val.toFixed(2) : "—"}</p>
-                {val != null && <p className="text-xs opacity-60 mt-0.5">imp. {(1 / val * 100).toFixed(0)}%</p>}
-              </div>
-            ))}
+            {(["1", "X", "2"] as const).map((label) => {
+              const val = label === "1" ? feats.odds?.home : label === "X" ? feats.odds?.draw : feats.odds?.away;
+              return (
+                <div key={label} className={`border rounded-lg p-3 ${BADGE[label]}`}>
+                  <p className="text-lg font-bold">{label}</p>
+                  <p className="text-2xl font-extrabold mt-1">{val != null ? val.toFixed(2) : "—"}</p>
+                  {val != null && <p className="text-xs opacity-60 mt-0.5">imp. {(1 / val * 100).toFixed(0)}%</p>}
+                </div>
+              );
+            })}
           </div>
           <p className="text-xs text-gray-400 mt-2 text-center">Kaynak: Bet365 · Tarihsel snapshot</p>
         </div>
@@ -337,7 +550,51 @@ export default function MatchDetailPage() {
         </div>
       )}
 
-      {/* ── Radar + Team comparison ──────────────────────────────────────────── */}
+      {/* ── xG & luck section ─────────────────────────────────────────────────── */}
+      {hasXG && (
+        <div className="bg-white rounded-xl shadow p-5">
+          <h2 className="text-sm font-bold text-gray-700 mb-3">xG Proxy & Form Kalitesi</h2>
+          <div className="space-y-3">
+            {/* xG bar comparison */}
+            <div>
+              <p className="text-xs text-gray-400 mb-2">xG proxy (son 5 maç ort., son 5 maç şut × 0.33)</p>
+              {(["home", "away"] as const).map(side => {
+                const xg = side === "home" ? feats?.xg_proxy_home : feats?.xg_proxy_away;
+                const luck = side === "home" ? feats?.xg_luck_home : feats?.xg_luck_away;
+                const team = side === "home" ? homeTeam : awayTeam;
+                const color = side === "home" ? "bg-blue-400" : "bg-red-400";
+                const textColor = side === "home" ? "text-blue-600" : "text-red-500";
+                return (
+                  <div key={side} className="flex items-center gap-2 mb-1">
+                    <span className={`text-[10px] font-bold px-1 rounded w-20 shrink-0 ${textColor}`}>{team.slice(0, 10)}</span>
+                    <div className="flex-1 h-3 bg-gray-100 rounded overflow-hidden">
+                      <div className={`h-full ${color} rounded`} style={{ width: `${Math.min(100, (xg ?? 0) * 50)}%` }} />
+                    </div>
+                    <span className="text-xs font-mono text-gray-600 w-10 text-right">{xg?.toFixed(2) ?? "—"}</span>
+                    {luck != null && (
+                      <span className={`text-[10px] font-medium w-16 text-right ${luck > 0.4 ? "text-amber-500" : luck < -0.4 ? "text-blue-600" : "text-gray-400"}`}>
+                        {luck > 0.4 ? "🍀 şanslı" : luck < -0.4 ? "😓 şanssız" : "dengeli"}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Lucky/unlucky flags */}
+            <div className="flex flex-wrap gap-2 pt-1 border-t border-gray-50">
+              {feats?.lucky_form_home && <span className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">🍀 {homeTeam.slice(0,8)} şanslı form (ortalamadan yüksek gol)</span>}
+              {feats?.lucky_form_away && <span className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">🍀 {awayTeam.slice(0,8)} şanslı form</span>}
+              {feats?.unlucky_form_home && <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">😓 {homeTeam.slice(0,8)} şanssız form (ortalamadan düşük gol)</span>}
+              {feats?.unlucky_form_away && <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">😓 {awayTeam.slice(0,8)} şanssız form</span>}
+              {!feats?.lucky_form_home && !feats?.lucky_form_away && !feats?.unlucky_form_home && !feats?.unlucky_form_away && (
+                <span className="text-xs text-gray-400">Şans düzeltmesi yok — form kalitesi dengeli</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Radar + Team comparison ───────────────────────────────────────────── */}
       {feats?.home && feats?.away ? (
         <SubscriberGate>
           <div className="bg-white rounded-xl shadow p-5">
@@ -351,6 +608,10 @@ export default function MatchDetailPage() {
                   homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
                 <StatRow label="Form Skoru" homeVal={feats.home.form_score} awayVal={feats.away.form_score}
                   homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
+                <StatRow label="Motivasyon" homeVal={feats.motivation_home} awayVal={feats.motivation_away}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
+                <StatRow label="Dep. Form" homeVal={feats.away_form_home} awayVal={feats.away_form_away}
+                  homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
                 <StatRow label="Maç Başı Puan" homeVal={feats.home.season_ppg} awayVal={feats.away.season_ppg}
                   homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => v.toFixed(2)} />
                 <StatRow label="Gol Farkı / Maç" homeVal={feats.home.goal_diff_per_game} awayVal={feats.away.goal_diff_per_game}
@@ -361,8 +622,6 @@ export default function MatchDetailPage() {
                   homeLabel={homeTeam} awayLabel={awayTeam} fmt={(v) => (v * 100).toFixed(0)} />
               </div>
             </div>
-
-            {/* Edge bars */}
             <div className="mt-5 space-y-3 border-t pt-4">
               <EdgeBar label="Güç Farkı" value={feats.strength_edge} leftLabel={awayTeam} rightLabel={homeTeam} />
               <EdgeBar label="Form Farkı" value={feats.form_edge} leftLabel={awayTeam} rightLabel={homeTeam} />
@@ -377,63 +636,94 @@ export default function MatchDetailPage() {
         </div>
       )}
 
-      {/* ── Feature gauges ───────────────────────────────────────────────────── */}
-      {feats ? (
-        <div className="bg-white rounded-xl shadow p-5">
-          <h2 className="text-sm font-bold text-gray-700 mb-3">Maç Analizi (Özellik Skorları)</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <Gauge label="Beraberlik Eğilimi" value={feats.draw_tendency} description="0=kesin sonuç · 100=yüksek bera. riski" />
-            <Gauge label="Denge Skoru" value={feats.balance_score} description="İki takımın ne kadar dengeli olduğu" />
-            <Gauge label="Düşük Tempo" value={feats.low_tempo_signal} description="Az şut / az atak beklentisi" />
-            <Gauge label="Az Gol" value={feats.low_goal_signal} description="2.5 altı gol olasılığı" />
-            <Gauge label="Beraberlik Tarihi" value={feats.draw_history} description="Bu iki takım arasındaki geçmiş beraberlik oranı" />
-            <Gauge label="Taktik Simetri" value={feats.tactical_symmetry} description="Benzer oyun stili / taktik profil" />
-            <Gauge label="Piyasa Desteği" value={feats.market_support} description="Bahis piyasasının ev sahibine verdiği ağırlık" />
-            <Gauge label="Volatilite" value={feats.volatility_score} description="Tahmin güçlüğü — sürpriz riski" />
-            <Gauge label="Diziliş Güveni" value={feats.lineup_certainty} description="İlk 11 bilgisinin güvenilirliği" />
-            {(feats.lineup_penalty_home ?? 0) > 0.05 && (
-              <Gauge label="Ev Sahibi Ceza (Eksik)" value={feats.lineup_penalty_home} description="Eksik oyuncu etkisi — 0=tam kadro" invert />
-            )}
-            {(feats.lineup_penalty_away ?? 0) > 0.05 && (
-              <Gauge label="Deplasman Cezası (Eksik)" value={feats.lineup_penalty_away} description="Eksik oyuncu etkisi — 0=tam kadro" invert />
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {/* ── Lineup section ────────────────────────────────────────────────────── */}
-      {feats && (feats.lineup_penalty_home > 0.05 || feats.lineup_penalty_away > 0.05) ? (
+      {/* ── Key absences (upgraded) ───────────────────────────────────────────── */}
+      {feats && (
+        (feats.lineup_penalty_home ?? 0) > 0.05 ||
+        (feats.lineup_penalty_away ?? 0) > 0.05 ||
+        feats.key_attacker_absent_home ||
+        feats.key_attacker_absent_away ||
+        feats.key_defender_absent_home ||
+        feats.key_defender_absent_away
+      ) ? (
         <div className="bg-white rounded-xl shadow p-5 border-l-4 border-l-amber-400">
-          <h2 className="text-sm font-bold text-gray-700 mb-2">⚠ Kadro Uyarısı</h2>
-          <div className="flex gap-4 text-sm">
-            {feats.lineup_penalty_home > 0.05 && (
-              <div className="flex-1">
-                <p className="font-semibold text-blue-700">{homeTeam}</p>
-                <p className="text-xs text-gray-500 mt-0.5">Eksik etkisi: <span className="font-bold text-red-500">{(feats.lineup_penalty_home * 100).toFixed(0)}/100</span></p>
+          <h2 className="text-sm font-bold text-gray-700 mb-3">⚠ Kadro Uyarısı</h2>
+          <div className="grid grid-cols-2 gap-4">
+            {[
+              { team: homeTeam, side: "home", penalty: feats?.lineup_penalty_home, attacker: feats?.key_attacker_absent_home, defender: feats?.key_defender_absent_home, color: "text-blue-700" },
+              { team: awayTeam, side: "away", penalty: feats?.lineup_penalty_away, attacker: feats?.key_attacker_absent_away, defender: feats?.key_defender_absent_away, color: "text-red-600" },
+            ].map(({ team, penalty, attacker, defender, color }) => (
+              <div key={team}>
+                <p className={`font-semibold text-sm ${color} mb-1`}>{team}</p>
+                {(penalty ?? 0) > 0.05 && (
+                  <p className="text-xs text-gray-500">Eksik etkisi: <span className="font-bold text-red-500">{((penalty ?? 0) * 100).toFixed(0)}/100</span></p>
+                )}
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {attacker && <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200 font-medium">⚽ Anahtar Forvet Yok</span>}
+                  {defender && <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 font-medium">🛡 Anahtar Defans Yok</span>}
+                  {!attacker && !defender && (penalty ?? 0) > 0.05 && <span className="text-[10px] text-gray-400">Genel kadro eksikliği</span>}
+                </div>
               </div>
-            )}
-            {feats.lineup_penalty_away > 0.05 && (
-              <div className="flex-1">
-                <p className="font-semibold text-red-600">{awayTeam}</p>
-                <p className="text-xs text-gray-500 mt-0.5">Eksik etkisi: <span className="font-bold text-red-500">{(feats.lineup_penalty_away * 100).toFixed(0)}/100</span></p>
-              </div>
-            )}
+            ))}
           </div>
         </div>
-      ) : feats && feats.lineup_certainty < 0.3 ? (
+      ) : feats && (feats.lineup_certainty ?? 1) < 0.3 ? (
         <div className="bg-gray-50 rounded-xl shadow p-4">
           <p className="text-xs text-gray-500">⏳ <strong>Kadro bilgisi henüz gelmedi</strong> — ilk 11 genellikle maçtan 2 saat önce açıklanır.</p>
         </div>
       ) : null}
 
-      {/* ── H2H ──────────────────────────────────────────────────────────────── */}
+      {/* ── Feature gauges ────────────────────────────────────────────────────── */}
+      {feats ? (
+        <div className="bg-white rounded-xl shadow p-5">
+          <h2 className="text-sm font-bold text-gray-700 mb-3">Maç Analizi</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <Gauge label="Beraberlik Eğilimi" value={feats.draw_tendency} description="0=kesin sonuç · 100=yüksek bera. riski" />
+            <Gauge label="Denge Skoru" value={feats.balance_score} description="İki takımın ne kadar dengeli olduğu" />
+            <Gauge label="Düşük Tempo" value={feats.low_tempo_signal} description="Az şut / az atak beklentisi" />
+            <Gauge label="Az Gol (u2.5)" value={feats.low_goal_signal} description="2.5 altı gol olasılığı" />
+            <Gauge label="Beraberlik Tarihi" value={feats.draw_history} description="Bu iki takım arasındaki geçmiş bera. oranı" />
+            <Gauge label="Taktik Simetri" value={feats.tactical_symmetry} description="Benzer oyun stili / taktik profil" />
+            <Gauge label="Piyasa Desteği" value={feats.market_support} description="Piyasanın ev sahibine verdiği ağırlık" />
+            <Gauge label="Volatilite" value={feats.volatility_score} description="Tahmin güçlüğü — sürpriz riski" />
+            <Gauge label="Diziliş Güveni" value={feats.lineup_certainty} description="İlk 11 bilgisinin güvenilirliği" />
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── H2H (upgraded: win-rate bars + bogey flag) ───────────────────────── */}
       <div className="bg-white rounded-xl shadow p-5">
-        <h2 className="text-sm font-bold text-gray-700 mb-3">Son Karşılaşmalar (H2H)</h2>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h2 className="text-sm font-bold text-gray-700">Son Karşılaşmalar (H2H)</h2>
+          {feats?.h2h_bogey_flag && (
+            <span className="text-xs px-2 py-1 rounded-full bg-red-50 text-red-700 border border-red-200 font-semibold">
+              ⚠ Bogey Takım — {awayTeam} tarihsel üstünlüğü var
+            </span>
+          )}
+        </div>
+
+        {hasH2HStats && (
+          <div className="mb-4">
+            <H2HRateBar
+              homeRate={feats!.h2h_home_win_rate ?? 0.33}
+              drawRate={feats!.h2h_draw_rate ?? 0.33}
+              awayRate={feats!.h2h_away_win_rate ?? 0.33}
+              homeTeam={homeTeam}
+              awayTeam={awayTeam}
+            />
+            {feats?.h2h_venue_home_win_rate != null && (
+              <p className="text-[10px] text-gray-400 mt-1 text-center">
+                Bu stadyumda ev galibiyeti: <strong>{Math.round((feats.h2h_venue_home_win_rate ?? 0) * 100)}%</strong> · {feats.h2h_sample_size} maç
+              </p>
+            )}
+          </div>
+        )}
+
         {h2h.length === 0 ? (
           <p className="text-xs text-gray-400">Bu iki takım arasında veritabanında kayıtlı karşılaşma bulunmuyor.</p>
         ) : (
           <div className="space-y-2">
-            {h2h.map((g: any, i: number) => {
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            {(h2h as any[]).map((g: any, i: number) => {
               const res: string = g.result_from_home_perspective ?? "?";
               const pillCls = H2H_PILL[res] ?? H2H_PILL["?"];
               return (
@@ -469,8 +759,9 @@ export default function MatchDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {history.map((h: any, i: number) => {
-                    const prevPick = history[i + 1]?.primary_pick;
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  {(history as any[]).map((h: any, i: number) => {
+                    const prevPick = (history as any[])[i + 1]?.primary_pick;
                     const changed = prevPick && prevPick !== h.primary_pick;
                     return (
                       <tr key={i} className={`${i === 0 ? "font-semibold" : "text-gray-500"} ${changed ? "bg-amber-50" : ""}`}>

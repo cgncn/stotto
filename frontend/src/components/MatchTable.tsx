@@ -10,7 +10,7 @@ import type { PoolMatch, PoolSummary } from "@/lib/api";
 
 type SortKey = "seq" | "p1" | "px" | "p2" | "confidence" | "coverage_need";
 type SortDir = "asc" | "desc";
-type Filter = "all" | "riskiest" | "single" | "draw";
+type Filter = "all" | "riskiest" | "single" | "draw" | "derby" | "sharp_money" | "post_break";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -118,6 +118,12 @@ export default function MatchTable({
       });
     } else if (filter === "draw") {
       list = list.filter((m) => m.latest_score?.primary_pick === "X");
+    } else if (filter === "derby") {
+      list = list.filter((m) => m.is_derby);
+    } else if (filter === "sharp_money") {
+      list = list.filter((m) => m.sharp_money_flag === true);
+    } else if (filter === "post_break") {
+      list = list.filter((m) => m.post_intl_break === true);
     }
 
     list.sort((a, b) => {
@@ -140,6 +146,9 @@ export default function MatchTable({
     { key: "riskiest", label: "⚠ En Riskli" },
     { key: "single", label: "✓ Tekli Aday" },
     { key: "draw", label: "≡ Beraberlik Adayı" },
+    { key: "derby", label: "🔥 Derby" },
+    { key: "sharp_money", label: "📈 Sharp Money" },
+    { key: "post_break", label: "🌍 Milli Ara Sonrası" },
   ];
 
   return (
@@ -224,6 +233,8 @@ export default function MatchTable({
                     <span className="font-semibold text-gray-900 text-sm truncate">{m.home_team}</span>
                     <span className="text-gray-300 text-xs">vs</span>
                     <span className="font-semibold text-gray-900 text-sm truncate">{m.away_team}</span>
+                    {m.is_derby && <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200">DERBY</span>}
+                    {m.post_intl_break && <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-500 border border-blue-100">🌍 Milli Ara</span>}
                     <ChangeArrow history={history} />
                   </div>
                   {hasData ? (
@@ -301,11 +312,12 @@ export default function MatchTable({
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1 mb-0.5">
+                  <div className="flex items-center gap-1 mb-0.5 flex-wrap">
                     <span className="text-xs text-gray-400 font-mono">{m.sequence_no}.</span>
                     <span className="font-semibold text-sm text-gray-900 truncate">{m.home_team}</span>
                     <span className="text-gray-300 text-xs">vs</span>
                     <span className="font-semibold text-sm text-gray-900 truncate">{m.away_team}</span>
+                    {m.is_derby && <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200">DERBY</span>}
                     <ChangeArrow history={history} />
                   </div>
                   {hasData && (

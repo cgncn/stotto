@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.base import get_db
@@ -84,7 +84,15 @@ def _latest_score(db: Session, pm: models.WeeklyPoolMatch) -> MatchScoreOut | No
     )
 
 
-def _pm_to_summary(db: Session, pm: models.WeeklyPoolMatch) -> PoolMatchSummary:
+def _pm_to_summary(db: Session, pm: models.WeeklyPoolMatch, feat: models.MatchFeatureSnapshot | None = None) -> PoolMatchSummary:
+    sharp_money_flag = None
+    post_intl_break = None
+    if feat is not None:
+        if feat.sharp_money_signal is not None:
+            sharp_money_flag = abs(feat.sharp_money_signal) > 0.5
+        pib_h = feat.post_intl_break_home or False
+        pib_a = feat.post_intl_break_away or False
+        post_intl_break = pib_h or pib_a
     return PoolMatchSummary(
         id=pm.id,
         sequence_no=pm.sequence_no,
@@ -96,6 +104,9 @@ def _pm_to_summary(db: Session, pm: models.WeeklyPoolMatch) -> PoolMatchSummary:
         home_team=pm.fixture.home_team.name if pm.fixture and pm.fixture.home_team else "",
         away_team=pm.fixture.away_team.name if pm.fixture and pm.fixture.away_team else "",
         latest_score=_latest_score(db, pm),
+        is_derby=pm.is_derby or False,
+        sharp_money_flag=sharp_money_flag,
+        post_intl_break=post_intl_break,
     )
 
 
@@ -126,7 +137,31 @@ def get_current_pool(db: Session = Depends(get_db)):
 @router.get("/{pool_id}", response_model=list[PoolMatchSummary])
 def get_pool(pool_id: int, db: Session = Depends(get_db)):
     pool = _get_pool_or_404(pool_id, db)
-    return [_pm_to_summary(db, pm) for pm in pool.matches]
+    pm_ids = [pm.id for pm in pool.matches]
+
+    # Batch-load latest feature snapshot per match (avoid N+1)
+    subq = (
+        db.query(
+            models.MatchFeatureSnapshot.weekly_pool_match_id,
+            func.max(models.MatchFeatureSnapshot.snapshot_time).label("max_time"),
+        )
+        .filter(models.MatchFeatureSnapshot.weekly_pool_match_id.in_(pm_ids))
+        .group_by(models.MatchFeatureSnapshot.weekly_pool_match_id)
+        .subquery()
+    )
+    feat_rows = (
+        db.query(models.MatchFeatureSnapshot)
+        .join(
+            subq,
+            and_(
+                models.MatchFeatureSnapshot.weekly_pool_match_id == subq.c.weekly_pool_match_id,
+                models.MatchFeatureSnapshot.snapshot_time == subq.c.max_time,
+            ),
+        )
+        .all()
+    )
+    feat_by_pm = {f.weekly_pool_match_id: f for f in feat_rows}
+    return [_pm_to_summary(db, pm, feat_by_pm.get(pm.id)) for pm in pool.matches]
 
 
 @router.get("/{pool_id}/matches/{match_id}", response_model=MatchDetailOut)
@@ -190,6 +225,16 @@ def get_match_detail(
         .first()
     ) if pm.fixture else None
 
+    # All odds snapshots (ASC) for movement display
+    all_odds_snaps = []
+    if pm.fixture:
+        all_odds_snaps = (
+            db.query(models.FixtureOddsSnapshot)
+            .filter_by(fixture_id=pm.fixture_id)
+            .order_by(models.FixtureOddsSnapshot.snapshot_time.asc())
+            .all()
+        )
+
     features = None
     if feat_snap:
         rf = feat_snap.raw_features or {}
@@ -197,6 +242,7 @@ def get_match_detail(
         away_rf = rf.get("away", {})
         market_rf = rf.get("market", {})
         features = {
+            # v1
             "strength_edge": feat_snap.strength_edge,
             "form_edge": feat_snap.form_edge,
             "home_advantage": feat_snap.home_advantage,
@@ -212,6 +258,60 @@ def get_match_detail(
             "lineup_penalty_home": feat_snap.lineup_penalty_home,
             "lineup_penalty_away": feat_snap.lineup_penalty_away,
             "lineup_certainty": feat_snap.lineup_certainty,
+            # v2: H2H
+            "h2h_home_win_rate": feat_snap.h2h_home_win_rate,
+            "h2h_away_win_rate": feat_snap.h2h_away_win_rate,
+            "h2h_draw_rate": feat_snap.h2h_draw_rate,
+            "h2h_venue_home_win_rate": feat_snap.h2h_venue_home_win_rate,
+            "h2h_bogey_flag": feat_snap.h2h_bogey_flag,
+            "h2h_sample_size": feat_snap.h2h_sample_size,
+            # v2: schedule
+            "rest_days_home_actual": feat_snap.rest_days_home_actual,
+            "rest_days_away_actual": feat_snap.rest_days_away_actual,
+            "post_intl_break_home": feat_snap.post_intl_break_home,
+            "post_intl_break_away": feat_snap.post_intl_break_away,
+            "congestion_risk_home": feat_snap.congestion_risk_home,
+            "congestion_risk_away": feat_snap.congestion_risk_away,
+            # v2: derby
+            "is_derby": feat_snap.is_derby,
+            "derby_confidence_suppressor": feat_snap.derby_confidence_suppressor,
+            # v2: odds movement
+            "opening_odds_home": feat_snap.opening_odds_home,
+            "opening_odds_away": feat_snap.opening_odds_away,
+            "opening_odds_draw": feat_snap.opening_odds_draw,
+            "odds_delta_home": feat_snap.odds_delta_home,
+            "sharp_money_signal": feat_snap.sharp_money_signal,
+            # v2: away form
+            "away_form_home": feat_snap.away_form_home,
+            "away_form_away": feat_snap.away_form_away,
+            # v2: xG / luck
+            "xg_proxy_home": feat_snap.xg_proxy_home,
+            "xg_proxy_away": feat_snap.xg_proxy_away,
+            "xg_luck_home": feat_snap.xg_luck_home,
+            "xg_luck_away": feat_snap.xg_luck_away,
+            "lucky_form_home": feat_snap.lucky_form_home,
+            "lucky_form_away": feat_snap.lucky_form_away,
+            "unlucky_form_home": feat_snap.unlucky_form_home,
+            "unlucky_form_away": feat_snap.unlucky_form_away,
+            # v2: motivation
+            "motivation_home": feat_snap.motivation_home,
+            "motivation_away": feat_snap.motivation_away,
+            "points_above_relegation_home": feat_snap.points_above_relegation_home,
+            "points_above_relegation_away": feat_snap.points_above_relegation_away,
+            "points_to_top4_home": feat_snap.points_to_top4_home,
+            "points_to_top4_away": feat_snap.points_to_top4_away,
+            "points_to_top6_home": feat_snap.points_to_top6_home,
+            "points_to_top6_away": feat_snap.points_to_top6_away,
+            "points_to_title_home": feat_snap.points_to_title_home,
+            "points_to_title_away": feat_snap.points_to_title_away,
+            "long_unbeaten_home": feat_snap.long_unbeaten_home,
+            "long_unbeaten_away": feat_snap.long_unbeaten_away,
+            # v2: key absences
+            "key_attacker_absent_home": feat_snap.key_attacker_absent_home,
+            "key_attacker_absent_away": feat_snap.key_attacker_absent_away,
+            "key_defender_absent_home": feat_snap.key_defender_absent_home,
+            "key_defender_absent_away": feat_snap.key_defender_absent_away,
+            # team snapshots
             "home": {
                 "strength_score": home_team_snap.strength_score if home_team_snap else home_rf.get("strength_score"),
                 "form_score": home_team_snap.form_score if home_team_snap else home_rf.get("form_score"),
@@ -235,6 +335,15 @@ def get_match_detail(
                 "draw": odds_snap.draw_odds if odds_snap else None,
                 "away": odds_snap.away_odds if odds_snap else None,
             },
+            "odds_snapshots": [
+                {
+                    "snapshot_time": s.snapshot_time.isoformat(),
+                    "home": s.home_odds,
+                    "draw": s.draw_odds,
+                    "away": s.away_odds,
+                }
+                for s in all_odds_snaps
+            ],
             "market": market_rf,
         }
 

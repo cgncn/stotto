@@ -30,6 +30,10 @@ class PoolMatchSummary(BaseModel):
     home_team: str
     away_team: str
     latest_score: MatchScoreOut | None
+    # v2 flags for home listing filters/badges
+    is_derby: bool = False
+    sharp_money_flag: bool | None = None   # |sharp_money_signal| > 0.5
+    post_intl_break: bool | None = None   # either team post-break
 
     model_config = {"from_attributes": True}
 
