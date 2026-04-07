@@ -19,12 +19,15 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
 
-    # Stripe
-    stripe_secret_key: str = ""
-    stripe_webhook_secret: str = ""
-    stripe_price_id: str = ""
-    stripe_success_url: str = "http://localhost:3000/hesap?success=1"
-    stripe_cancel_url: str = "http://localhost:3000/uye-ol?cancelled=1"
+    # iyzico
+    iyzico_api_key: str = ""
+    iyzico_secret_key: str = ""
+    iyzico_base_url: str = "https://sandbox-api.iyzipay.com"
+    iyzico_subscription_plan_ref_code: str = ""
+    iyzico_callback_url: str = "http://localhost:8000/webhooks/iyzico/callback"
+    iyzico_success_url: str = "http://localhost:3000/hesap?success=1"
+    iyzico_cancel_url: str = "http://localhost:3000/uye-ol?cancelled=1"
+    backend_base_url: str = "http://localhost:8000"
 
     # App
     environment: str = "development"

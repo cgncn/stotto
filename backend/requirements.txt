@@ -27,8 +27,8 @@ python-dateutil==2.9.0
 pydantic-settings==2.7.0
 pydantic==2.10.4
 
-# Stripe
-stripe>=7.0.0
+# iyzico
+iyzipay>=1.0.46
 
 # Testing
 pytest==8.3.4
