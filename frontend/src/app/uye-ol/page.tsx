@@ -27,7 +27,9 @@ function FeatureRow({ label, available }: { label: string; available: boolean })
       ) : (
         <span className="text-gray-300 font-bold">✗</span>
       )}
-      <span className={available ? "text-gray-700" : "text-gray-400"}>{label}</span>
+      <span className={available ? "text-gray-700" : "text-gray-400"}>
+        {label}
+      </span>
     </li>
   );
 }
@@ -36,7 +38,6 @@ export default function UyeOlPage() {
   const { user, token, isSubscriber, loading: authLoading } = useAuth();
   const router = useRouter();
   const [checkoutLoading, setCheckoutLoading] = useState(false);
-  const [portalLoading, setPortalLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,24 +54,13 @@ export default function UyeOlPage() {
     setActionError(null);
     setCheckoutLoading(true);
     try {
+      // Backend returns a URL pointing to the iyzico checkout-form endpoint.
+      // We navigate the browser there (full-page navigation, not a fetch).
       const res = await authedPost<{ url: string }>("/subscriptions/checkout", {}, token);
       window.location.href = res.url;
     } catch {
       setCheckoutLoading(false);
       setActionError("Ödeme sayfasına yönlendirilemedi. Lütfen tekrar deneyin.");
-    }
-  }
-
-  async function handlePortal() {
-    if (!token) return;
-    setActionError(null);
-    setPortalLoading(true);
-    try {
-      const res = await authedPost<{ url: string }>("/subscriptions/portal", {}, token);
-      window.location.href = res.url;
-    } catch {
-      setPortalLoading(false);
-      setActionError("Abonelik yönetim sayfasına yönlendirilemedi. Lütfen tekrar deneyin.");
     }
   }
 
@@ -145,15 +135,14 @@ export default function UyeOlPage() {
         {isSubscriber ? (
           <div className="bg-green-50 border border-green-200 rounded-xl p-6">
             <p className="text-green-700 font-medium mb-3">
-              Zaten aboneniz! Hesabı yönetmek için:
+              Zaten aboneniz! Aboneliğinizi yönetmek için:
             </p>
-            <button
-              onClick={handlePortal}
-              disabled={portalLoading}
-              className="bg-brand-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-colors"
+            <Link
+              href="/hesap#abonelik"
+              className="bg-brand-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors inline-block"
             >
-              {portalLoading ? "Yönlendiriliyor…" : "Aboneliği Yönet"}
-            </button>
+              Hesabıma Git
+            </Link>
           </div>
         ) : (
           <div>
@@ -167,7 +156,10 @@ export default function UyeOlPage() {
             {!user && (
               <p className="mt-3 text-sm text-gray-400">
                 Devam etmek için{" "}
-                <Link href="/auth/giris?next=/uye-ol" className="text-brand-600 hover:underline">
+                <Link
+                  href="/auth/giris?next=/uye-ol"
+                  className="text-brand-600 hover:underline"
+                >
                   giriş yapmanız
                 </Link>{" "}
                 gerekiyor.
