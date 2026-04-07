@@ -107,7 +107,7 @@ def cancel_subscription(ref: str) -> bool:
 def pause_subscription(ref: str) -> bool:
     """Pause (deactivate) a subscription. Returns True on success."""
     result = _parse(
-        iyzipay.Subscription().deactivate({"subscriptionReferenceCode": ref}, _options())
+        _ExtendedSubscription().deactivate({"subscriptionReferenceCode": ref}, _options())
     )
     return result.get("status") == "success"
 
@@ -147,7 +147,7 @@ def get_payment_history(subscription_ref: str) -> list[dict]:
         "page": 0,
         "count": 20,
     }
-    result = _parse(iyzipay.Subscription().orders(request, _options()))
+    result = _parse(_ExtendedSubscription().orders(request, _options()))
     if result.get("status") != "success":
         raise IyzicoError(result.get("errorMessage", "Ödeme geçmişi alınamadı"))
     return result.get("data", {}).get("items", [])

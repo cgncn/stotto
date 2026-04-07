@@ -103,7 +103,7 @@ def test_pause_subscription_returns_true_on_success():
 
     response = _mock_iyzipay_response({"status": "success"})
 
-    with patch("iyzipay.Subscription") as MockCls:
+    with patch("app.services.iyzico_service._ExtendedSubscription") as MockCls:
         MockCls.return_value.deactivate.return_value = response
         assert pause_subscription("sub-ref-001") is True
 
@@ -154,7 +154,7 @@ def test_get_payment_history_returns_items():
     items = [{"price": 49.90, "status": "PAID"}, {"price": 49.90, "status": "PAID"}]
     response = _mock_iyzipay_response({"status": "success", "data": {"items": items}})
 
-    with patch("iyzipay.Subscription") as MockCls:
+    with patch("app.services.iyzico_service._ExtendedSubscription") as MockCls:
         MockCls.return_value.orders.return_value = response
         result = get_payment_history("sub-ref-001")
 
@@ -167,7 +167,7 @@ def test_get_payment_history_returns_empty_list_on_no_items():
 
     response = _mock_iyzipay_response({"status": "success", "data": {"items": []}})
 
-    with patch("iyzipay.Subscription") as MockCls:
+    with patch("app.services.iyzico_service._ExtendedSubscription") as MockCls:
         MockCls.return_value.orders.return_value = response
         result = get_payment_history("sub-ref-001")
 
