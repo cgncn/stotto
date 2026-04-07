@@ -17,7 +17,6 @@ const DEMO = {
   week: "Hf 28",
   seq: 7,
   kickoff: "Pazar · 20:45",
-  isDerby: true,
   p1: 0.482,
   px: 0.271,
   p2: 0.247,
