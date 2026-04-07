@@ -158,6 +158,8 @@ class WeeklyPoolMatch(Base):
     status = Column(Enum(MatchStatus), default=MatchStatus.pending, nullable=False)
     is_locked = Column(Boolean, default=False, nullable=False)
     result = Column(String(1))  # '1', 'X', '2'
+    is_derby = Column(Boolean, default=False, nullable=False)
+    admin_flags = Column(JSON, default=dict)  # {"thursday_european_away": bool}
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     pool = relationship("WeeklyPool", back_populates="matches")
@@ -205,6 +207,17 @@ class FixtureStatisticsSnapshot(Base):
     id = Column(BigInteger, primary_key=True)
     fixture_id = Column(Integer, ForeignKey("fixtures.id"), nullable=False, index=True)
     snapshot_time = Column(DateTime, nullable=False, default=func.now())
+    payload_json = Column(JSON)
+
+
+class FixtureH2HSnapshot(Base):
+    __tablename__ = "fixture_h2h_snapshots"
+
+    id = Column(BigInteger, primary_key=True)
+    fixture_id = Column(Integer, ForeignKey("fixtures.id"), nullable=False, index=True)
+    snapshot_time = Column(DateTime, nullable=False, default=func.now())
+    home_team_id = Column(Integer, nullable=False)
+    away_team_id = Column(Integer, nullable=False)
     payload_json = Column(JSON)
 
 
@@ -275,6 +288,71 @@ class MatchFeatureSnapshot(Base):
     lineup_penalty_home = Column(Float)
     lineup_penalty_away = Column(Float)
     lineup_certainty = Column(Float)
+
+    # H2H
+    h2h_home_win_rate = Column(Float)
+    h2h_away_win_rate = Column(Float)
+    h2h_draw_rate = Column(Float)
+    h2h_venue_home_win_rate = Column(Float)
+    h2h_bogey_flag = Column(Boolean)
+    h2h_sample_size = Column(Integer)
+
+    # Real rest days
+    rest_days_home_actual = Column(Float)
+    rest_days_away_actual = Column(Float)
+
+    # International break
+    post_intl_break_home = Column(Boolean)
+    post_intl_break_away = Column(Boolean)
+
+    # Fixture congestion
+    congestion_risk_home = Column(Boolean)
+    congestion_risk_away = Column(Boolean)
+
+    # Derby
+    is_derby = Column(Boolean)
+    derby_confidence_suppressor = Column(Float)
+
+    # Odds movement
+    opening_odds_home = Column(Float)
+    opening_odds_away = Column(Float)
+    opening_odds_draw = Column(Float)
+    odds_delta_home = Column(Float)
+    sharp_money_signal = Column(Float)
+
+    # Away-specific form
+    away_form_home = Column(Float)
+    away_form_away = Column(Float)
+
+    # xG proxy & luck flags
+    xg_proxy_home = Column(Float)
+    xg_proxy_away = Column(Float)
+    xg_luck_home = Column(Float)
+    xg_luck_away = Column(Float)
+    lucky_form_home = Column(Boolean)
+    lucky_form_away = Column(Boolean)
+    unlucky_form_home = Column(Boolean)
+    unlucky_form_away = Column(Boolean)
+
+    # Motivation / objective
+    motivation_home = Column(Float)
+    motivation_away = Column(Float)
+    points_above_relegation_home = Column(Integer)
+    points_above_relegation_away = Column(Integer)
+    points_to_top4_home = Column(Integer)
+    points_to_top4_away = Column(Integer)
+    points_to_top6_home = Column(Integer)
+    points_to_top6_away = Column(Integer)
+    points_to_title_home = Column(Integer)
+    points_to_title_away = Column(Integer)
+    long_unbeaten_home = Column(Boolean)
+    long_unbeaten_away = Column(Boolean)
+
+    # Role-specific absences
+    key_attacker_absent_home = Column(Boolean)
+    key_attacker_absent_away = Column(Boolean)
+    key_defender_absent_home = Column(Boolean)
+    key_defender_absent_away = Column(Boolean)
 
     raw_features = Column(JSON)
 

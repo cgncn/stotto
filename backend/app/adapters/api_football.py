@@ -192,6 +192,31 @@ class APIFootballAdapter:
 
         return response_list
 
+    # ── Head-to-Head ───────────────────────────────────────────────────────
+
+    def fetch_h2h(self, home_ext_id: int, away_ext_id: int, fixture_db_id: int) -> list[dict]:
+        """
+        Fetch last 10 head-to-head fixtures between two teams and store snapshot.
+        Returns list of past fixture dicts from API-Football.
+        """
+        data = self._get(
+            "fixtures/headtohead",
+            {"h2h": f"{home_ext_id}-{away_ext_id}", "last": 10},
+        )
+        response_list = data.get("response", [])
+
+        snapshot = models.FixtureH2HSnapshot(
+            fixture_id=fixture_db_id,
+            snapshot_time=datetime.now(timezone.utc),
+            home_team_id=home_ext_id,
+            away_team_id=away_ext_id,
+            payload_json=response_list,
+        )
+        self.db.add(snapshot)
+        self.db.flush()
+
+        return response_list
+
     # ── Statistics ─────────────────────────────────────────────────────────
 
     def fetch_statistics(self, fixture_id: int) -> list[dict]:

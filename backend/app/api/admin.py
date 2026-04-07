@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.base import get_db
 from app.db import models
 from app.api.deps import require_admin
+from typing import Any
 from app.schemas.admin import WeeklyImportRequest, ManualOverrideRequest
 
 router = APIRouter()
@@ -16,9 +17,18 @@ def trigger_weekly_import(
     body: WeeklyImportRequest,
     _: models.User = Depends(require_admin),
 ):
-    """Trigger a weekly pool import via Celery."""
+    """Trigger a weekly pool import via Celery.
+
+    Accepts either:
+      - fixture_external_ids: [123, 456, ...]   (simple list, no flags)
+      - fixtures: [{external_id: 123, admin_flags: {thursday_european_away: true}}, ...]
+    """
     from app.workers.tasks import task_weekly_import
-    task = task_weekly_import.delay(body.week_code, body.fixture_external_ids)
+    items = body.get_fixture_items()
+    task = task_weekly_import.delay(
+        week_code=body.week_code,
+        fixtures_data=[{"external_id": it.external_id, "admin_flags": it.admin_flags} for it in items],
+    )
     return {"detail": "İçe aktarma başlatıldı", "task_id": task.id}
 
 
@@ -57,6 +67,36 @@ def recompute_match(
     _score_match(db, pm)
     db.commit()
     return {"detail": "Maç yeniden hesaplandı", "match_id": match_id}
+
+
+@router.post("/pools/{pool_id}/matches/{match_id}/flags")
+def update_match_flags(
+    pool_id: int,
+    match_id: int,
+    flags: dict[str, Any],
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """
+    Update admin flags for a specific pool match after import.
+    Supported flags:
+      is_derby: bool               — mark/unmark as derby
+      thursday_european_away: bool — away team played European fixture on Thursday
+    """
+    pm = db.query(models.WeeklyPoolMatch).filter_by(id=match_id, weekly_pool_id=pool_id).first()
+    if not pm:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Maç bulunamadı")
+    if pm.is_locked:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Maç kilitli")
+
+    if "is_derby" in flags:
+        pm.is_derby = bool(flags.pop("is_derby"))
+
+    if flags:
+        pm.admin_flags = {**(pm.admin_flags or {}), **flags}
+
+    db.commit()
+    return {"detail": "Bayraklar güncellendi", "match_id": match_id, "is_derby": pm.is_derby, "admin_flags": pm.admin_flags}
 
 
 @router.post("/manual-override")

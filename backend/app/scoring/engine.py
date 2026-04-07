@@ -1,10 +1,11 @@
 """
-Scoring engine.
-Implements §9 of the specification:
+Scoring engine v2.
+Implements §9 of the specification with expanded signal suite:
   Score_1, Score_X, Score_2 → softmax → P1, PX, P2
-  Confidence score
+  Confidence score (with derby / international break / lucky form suppressors)
   Coverage-need score
   Coverage type assignment (single/double/triple)
+  Expanded reason codes
 """
 from __future__ import annotations
 
@@ -18,19 +19,25 @@ from app.db import models
 
 logger = logging.getLogger(__name__)
 
-MODEL_VERSION = "v1"
+MODEL_VERSION = "v2"
 
-# Softmax temperature (higher T = less confident distribution)
+# Softmax temperature (lower T = more confident distribution)
 SOFTMAX_T = 0.4
 
 # Coverage-need thresholds from spec §9.4
 SINGLE_MAX = 38.0
 DOUBLE_MAX = 72.0
 
+# Confidence suppressors
+_DERBY_SUPPRESSOR = 0.75
+_INTL_BREAK_SUPPRESSOR = 0.88
+_LUCKY_FORM_SUPPRESSOR = 0.90
+_LONG_UNBEATEN_SUPPRESSOR = 0.93   # complacency risk for home side
+
 
 def run_scoring_engine(db: Session, pool: models.WeeklyPool) -> None:
     """Score every unlocked match in the pool and write MatchModelScore rows."""
-    logger.info("Scoring engine running for pool %d", pool.id)
+    logger.info("Scoring engine v2 running for pool %d", pool.id)
 
     for pm in pool.matches:
         if pm.is_locked:
@@ -38,7 +45,7 @@ def run_scoring_engine(db: Session, pool: models.WeeklyPool) -> None:
         try:
             _score_match(db, pm)
         except Exception as exc:
-            logger.error("Scoring failed for match %d: %s", pm.id, exc)
+            logger.error("Scoring failed for match %d: %s", pm.id, exc, exc_info=True)
 
 
 def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
@@ -59,39 +66,49 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
 
     f = _FeatureBundle(feat_snap)
 
-    # ── Score_1 ────────────────────────────────────────────────────────────
+    # ── Score_1 (Home Win) ─────────────────────────────────────────────────
     score_1 = (
-        0.24 * f.strength_edge_norm
-        + 0.18 * f.form_edge_norm
-        + 0.14 * f.home_advantage
-        + 0.12 * f.lineup_edge_home
-        + 0.10 * 0.5   # motivation (placeholder)
-        + 0.10 * f.market_support
-        + 0.06 * f.schedule_edge
-        + 0.06 * f.stability_edge
+        0.18 * f.strength_edge_norm
+        + 0.14 * f.form_edge_norm
+        + 0.10 * f.home_advantage
+        + 0.09 * f.lineup_edge_home
+        + 0.08 * f.motivation_edge           # home_motivation - away_motivation, normalized
+        + 0.08 * f.h2h_home_advantage        # H2H home win rate
+        + 0.07 * f.market_support
+        + 0.07 * f.away_form_penalty         # 1 - away_form_away (strong away team = more threat)
+        + 0.06 * f.schedule_edge             # real rest days
+        + 0.05 * f.sharp_money_home_signal   # 1 - sharp_money if moving toward home
+        + 0.04 * f.congestion_advantage      # 1.0 if away congested, 0.5 neutral, 0.0 if home
+        + 0.04 * f.xg_luck_edge              # unlucky home or lucky away → boost
     )
 
-    # ── Score_X ────────────────────────────────────────────────────────────
+    # ── Score_X (Draw) ─────────────────────────────────────────────────────
     score_x = (
-        0.26 * f.draw_tendency
-        + 0.18 * f.balance_score
-        + 0.14 * f.low_tempo_signal
-        + 0.12 * f.low_goal_signal
-        + 0.10 * f.market_draw_signal
-        + 0.10 * f.tactical_symmetry
-        + 0.10 * f.volatility_mid_zone
+        0.22 * f.draw_tendency
+        + 0.14 * f.balance_score
+        + 0.11 * f.low_tempo_signal
+        + 0.10 * f.low_goal_signal
+        + 0.09 * f.h2h_draw_rate
+        + 0.09 * f.market_draw_signal
+        + 0.08 * f.equal_motivation          # 1 - |motivation_home - motivation_away|
+        + 0.08 * f.tactical_symmetry
+        + 0.09 * f.volatility_mid_zone
     )
 
-    # ── Score_2 ────────────────────────────────────────────────────────────
+    # ── Score_2 (Away Win) ─────────────────────────────────────────────────
     score_2 = (
-        0.24 * f.away_strength_edge_norm
-        + 0.18 * f.away_form_edge_norm
-        + 0.14 * f.weak_home_signal
-        + 0.12 * f.lineup_edge_away
-        + 0.10 * 0.5   # motivation (placeholder)
-        + 0.10 * f.away_market_support
-        + 0.06 * f.schedule_edge
-        + 0.06 * f.stability_edge
+        0.18 * f.away_strength_edge_norm
+        + 0.14 * f.away_form_edge_norm
+        + 0.10 * f.weak_home_signal
+        + 0.09 * f.lineup_edge_away
+        + 0.08 * f.away_motivation_edge
+        + 0.08 * f.h2h_bogey_signal          # bogey flag or H2H away win rate
+        + 0.07 * f.away_market_support
+        + 0.07 * f.away_form_away            # away team's actual away record
+        + 0.06 * f.schedule_edge_away        # away team rest advantage
+        + 0.05 * f.sharp_money_away_signal
+        + 0.04 * f.intl_break_home_penalty   # home team post-break = away advantage
+        + 0.04 * f.xg_luck_edge_away
     )
 
     p1, px, p2 = _softmax([score_1, score_x, score_2], T=SOFTMAX_T)
@@ -101,17 +118,32 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
     primary_pick = ranked[0][0]
     secondary_pick = ranked[1][0]
 
-    # ── Confidence ────────────────────────────────────────────────────────
+    # ── Confidence (raw) ──────────────────────────────────────────────────
     p_max = ranked[0][1]
     p_second = ranked[1][1]
-    confidence = (
-        0.45 * (p_max - p_second)
-        + 0.20 * 0.5  # model consensus (placeholder)
+    h2h_alignment = _h2h_alignment(primary_pick, f)
+    motivation_clarity = abs(f.motivation_home_raw - f.motivation_away_raw)
+
+    confidence_raw = (
+        0.40 * (p_max - p_second)
         + 0.15 * f.feature_stability
-        + 0.10 * f.market_agreement
+        + 0.15 * f.market_agreement
         + 0.10 * f.lineup_certainty
+        + 0.10 * h2h_alignment
+        + 0.10 * motivation_clarity
     )
-    confidence_score = max(0.0, min(100.0, confidence * 100.0))
+
+    # Apply suppressors
+    if f.is_derby:
+        confidence_raw *= _DERBY_SUPPRESSOR
+    if f.post_intl_break_home or f.post_intl_break_away:
+        confidence_raw *= _INTL_BREAK_SUPPRESSOR
+    if f.lucky_form_home or f.lucky_form_away:
+        confidence_raw *= _LUCKY_FORM_SUPPRESSOR
+    if f.long_unbeaten_home and primary_pick == "1":
+        confidence_raw *= _LONG_UNBEATEN_SUPPRESSOR
+
+    confidence_score = max(0.0, min(100.0, confidence_raw * 100.0))
 
     # ── Coverage need ──────────────────────────────────────────────────────
     uncertainty = 1.0 - p_max
@@ -123,6 +155,12 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
         + 0.10 * f.lineup_uncertainty
         + 0.10 * f.coupon_criticality
     )
+    # Derby and H2H bogey increase coverage need
+    if f.is_derby:
+        coverage_need = min(1.0, coverage_need * 1.15)
+    if f.h2h_bogey_flag:
+        coverage_need = min(1.0, coverage_need * 1.10)
+
     coverage_need_score = max(0.0, min(100.0, coverage_need * 100.0))
 
     # ── Coverage type ──────────────────────────────────────────────────────
@@ -209,7 +247,6 @@ def _choose_double(primary: str, secondary: str, px: float) -> str:
     if pair == frozenset(["2", "X"]):
         return "X2"
     if pair == frozenset(["1", "2"]):
-        # Use X protection when draw risk is meaningful
         if px >= 0.25:
             if primary == "1":
                 return "1X"
@@ -218,8 +255,22 @@ def _choose_double(primary: str, secondary: str, px: float) -> str:
     return primary + secondary  # fallback
 
 
-def _build_reason_codes(f: "_FeatureBundle", primary: str, coverage: models.CoverageType) -> list[str]:
+def _h2h_alignment(primary_pick: str, f: "_FeatureBundle") -> float:
+    """How well the H2H record agrees with the model's pick."""
+    if f.h2h_sample_size == 0:
+        return 0.5  # no data = neutral
+    if primary_pick == "1":
+        return f.h2h_home_win_rate_raw
+    if primary_pick == "2":
+        return f.h2h_away_win_rate_raw
+    return f.h2h_draw_rate_raw
+
+
+def _build_reason_codes(
+    f: "_FeatureBundle", primary: str, coverage: models.CoverageType
+) -> list[str]:
     codes = []
+    # Existing codes
     if f.strength_edge_norm > 0.6:
         codes.append("HOME_STRENGTH")
     if f.away_strength_edge_norm > 0.6:
@@ -240,6 +291,39 @@ def _build_reason_codes(f: "_FeatureBundle", primary: str, coverage: models.Cove
         codes.append("HIGH_VOLATILITY")
     if coverage == models.CoverageType.triple:
         codes.append("TRIPLE_RISK")
+    # New codes
+    if f.is_derby:
+        codes.append("DERBY_FLAG")
+    if f.h2h_bogey_flag:
+        codes.append("H2H_BOGEY")
+    if f.h2h_home_win_rate_raw > 0.6 and f.h2h_sample_size >= 4:
+        codes.append("H2H_HOME_DOMINANT")
+    if f.post_intl_break_home or f.post_intl_break_away:
+        codes.append("POST_INTL_BREAK")
+    if f.sharp_money_signal_raw > 0.5:
+        codes.append("SHARP_MONEY_AWAY")
+    if f.sharp_money_signal_raw < -0.5:
+        codes.append("SHARP_MONEY_HOME")
+    if f.lucky_form_home:
+        codes.append("LUCKY_FORM_HOME")
+    if f.lucky_form_away:
+        codes.append("LUCKY_FORM_AWAY")
+    if f.unlucky_form_home:
+        codes.append("UNLUCKY_FORM_HOME")
+    if f.unlucky_form_away:
+        codes.append("UNLUCKY_FORM_AWAY")
+    if f.motivation_home_raw > 0.65:
+        codes.append("HIGH_MOTIVATION_HOME")
+    if f.motivation_away_raw > 0.65:
+        codes.append("HIGH_MOTIVATION_AWAY")
+    if f.congestion_risk_away:
+        codes.append("CONGESTION_RISK_AWAY")
+    if f.key_attacker_absent_home or f.key_attacker_absent_away:
+        codes.append("KEY_ATTACKER_ABSENT")
+    if f.key_defender_absent_home or f.key_defender_absent_away:
+        codes.append("KEY_DEFENDER_ABSENT")
+    if f.long_unbeaten_home:
+        codes.append("LONG_UNBEATEN_HOME")
     return codes
 
 
@@ -252,6 +336,12 @@ class _FeatureBundle:
     def _get(self, attr, default=0.5):
         v = getattr(self._s, attr, None)
         return v if v is not None else default
+
+    def _getb(self, attr) -> bool:
+        v = getattr(self._s, attr, None)
+        return bool(v) if v is not None else False
+
+    # ── Core existing ──────────────────────────────────────────────────────
 
     @property
     def strength_edge_norm(self):
@@ -336,13 +426,11 @@ class _FeatureBundle:
 
     @property
     def lineup_edge_home(self):
-        penalty = self._get("lineup_penalty_home", 0.0)
-        return max(0.0, 1.0 - penalty)
+        return max(0.0, 1.0 - self._get("lineup_penalty_home", 0.0))
 
     @property
     def lineup_edge_away(self):
-        penalty = self._get("lineup_penalty_away", 0.0)
-        return max(0.0, 1.0 - penalty)
+        return max(0.0, 1.0 - self._get("lineup_penalty_away", 0.0))
 
     @property
     def weak_home_signal(self):
@@ -350,10 +438,14 @@ class _FeatureBundle:
 
     @property
     def schedule_edge(self):
-        rh = self._get("rest_days_home", 7)
-        ra = self._get("rest_days_away", 7)
+        rh = self._get("rest_days_home_actual", 7)
+        ra = self._get("rest_days_away_actual", 7)
         diff = (rh - ra) / 7.0
         return max(0.0, min(1.0, 0.5 + diff * 0.5))
+
+    @property
+    def schedule_edge_away(self):
+        return 1.0 - self.schedule_edge
 
     @property
     def stability_edge(self):
@@ -369,7 +461,191 @@ class _FeatureBundle:
 
     @property
     def coupon_criticality(self):
-        return 0.5  # placeholder until optimizer pass sets it
+        return 0.5  # set by optimizer pass
+
+    # ── H2H ────────────────────────────────────────────────────────────────
+
+    @property
+    def h2h_home_win_rate_raw(self):
+        return self._get("h2h_home_win_rate", 0.33)
+
+    @property
+    def h2h_away_win_rate_raw(self):
+        return self._get("h2h_away_win_rate", 0.33)
+
+    @property
+    def h2h_draw_rate_raw(self):
+        return self._get("h2h_draw_rate", 0.33)
+
+    @property
+    def h2h_home_advantage(self):
+        return self._get("h2h_home_win_rate", 0.33)
+
+    @property
+    def h2h_draw_rate(self):
+        return self._get("h2h_draw_rate", 0.33)
+
+    @property
+    def h2h_bogey_signal(self):
+        if self._getb("h2h_bogey_flag"):
+            return 0.8  # strong away signal
+        return self._get("h2h_away_win_rate", 0.33)
+
+    @property
+    def h2h_bogey_flag(self):
+        return self._getb("h2h_bogey_flag")
+
+    @property
+    def h2h_sample_size(self):
+        return self._get("h2h_sample_size", 0)
+
+    # ── Context ────────────────────────────────────────────────────────────
+
+    @property
+    def is_derby(self):
+        return self._getb("is_derby")
+
+    @property
+    def post_intl_break_home(self):
+        return self._getb("post_intl_break_home")
+
+    @property
+    def post_intl_break_away(self):
+        return self._getb("post_intl_break_away")
+
+    @property
+    def congestion_risk_away(self):
+        return self._getb("congestion_risk_away")
+
+    @property
+    def congestion_advantage(self):
+        """1.0 if away congested, 0.0 if home congested, 0.5 neutral."""
+        ha = self._getb("congestion_risk_home")
+        aa = self._getb("congestion_risk_away")
+        if aa and not ha:
+            return 1.0
+        if ha and not aa:
+            return 0.0
+        return 0.5
+
+    @property
+    def intl_break_home_penalty(self):
+        """Away team gets a boost if home team is post-international break."""
+        return 1.0 if self.post_intl_break_home else 0.0
+
+    # ── Motivation ─────────────────────────────────────────────────────────
+
+    @property
+    def motivation_home_raw(self):
+        return self._get("motivation_home", 0.3)
+
+    @property
+    def motivation_away_raw(self):
+        return self._get("motivation_away", 0.3)
+
+    @property
+    def motivation_edge(self):
+        """Normalized [0, 1] advantage for home motivation over away."""
+        diff = self.motivation_home_raw - self.motivation_away_raw
+        return max(0.0, min(1.0, 0.5 + diff))
+
+    @property
+    def away_motivation_edge(self):
+        return 1.0 - self.motivation_edge
+
+    @property
+    def equal_motivation(self):
+        """High when both teams equally motivated → draw more likely."""
+        return 1.0 - abs(self.motivation_home_raw - self.motivation_away_raw)
+
+    @property
+    def long_unbeaten_home(self):
+        return self._getb("long_unbeaten_home")
+
+    # ── Odds movement ──────────────────────────────────────────────────────
+
+    @property
+    def sharp_money_signal_raw(self):
+        return self._get("sharp_money_signal", 0.0)
+
+    @property
+    def sharp_money_home_signal(self):
+        """1.0 when sharp money strongly toward home (negative delta = odds shortened)."""
+        return max(0.0, min(1.0, 0.5 - self.sharp_money_signal_raw / 2.0))
+
+    @property
+    def sharp_money_away_signal(self):
+        """1.0 when sharp money strongly toward away (positive delta = odds drifted)."""
+        return max(0.0, min(1.0, 0.5 + self.sharp_money_signal_raw / 2.0))
+
+    # ── Away form ──────────────────────────────────────────────────────────
+
+    @property
+    def away_form_away(self):
+        return self._get("away_form_away", 0.4)
+
+    @property
+    def away_form_penalty(self):
+        """1 - away_form_away: strong away team = higher threat, lower home confidence."""
+        return 1.0 - self.away_form_away
+
+    # ── xG / luck ──────────────────────────────────────────────────────────
+
+    @property
+    def lucky_form_home(self):
+        return self._getb("lucky_form_home")
+
+    @property
+    def lucky_form_away(self):
+        return self._getb("lucky_form_away")
+
+    @property
+    def unlucky_form_home(self):
+        return self._getb("unlucky_form_home")
+
+    @property
+    def unlucky_form_away(self):
+        return self._getb("unlucky_form_away")
+
+    @property
+    def xg_luck_edge(self):
+        """
+        Positive signal for home win when:
+        - home team is unlucky (due for positive reversion) OR
+        - away team is lucky (due for negative reversion)
+        """
+        score = 0.5
+        if self.unlucky_form_home:
+            score += 0.25
+        if self.lucky_form_away:
+            score += 0.25
+        if self.lucky_form_home:
+            score -= 0.25
+        if self.unlucky_form_away:
+            score -= 0.25
+        return max(0.0, min(1.0, score))
+
+    @property
+    def xg_luck_edge_away(self):
+        return 1.0 - self.xg_luck_edge
+
+    # ── Key absences ───────────────────────────────────────────────────────
+
+    @property
+    def key_attacker_absent_home(self):
+        return self._getb("key_attacker_absent_home")
+
+    @property
+    def key_attacker_absent_away(self):
+        return self._getb("key_attacker_absent_away")
+
+    @property
+    def key_defender_absent_home(self):
+        return self._getb("key_defender_absent_home")
+
+    @property
+    def key_defender_absent_away(self):
+        return self._getb("key_defender_absent_away")
 
     @property
     def id(self):
@@ -398,9 +674,15 @@ def _neutral_features(pm_id: int) -> models.MatchFeatureSnapshot:
         lineup_penalty_home=0.0,
         lineup_penalty_away=0.0,
         lineup_certainty=0.0,
+        # New fields default to None / False
+        h2h_home_win_rate=0.33,
+        h2h_away_win_rate=0.33,
+        h2h_draw_rate=0.33,
+        h2h_sample_size=0,
+        is_derby=False,
+        derby_confidence_suppressor=1.0,
+        motivation_home=0.3,
+        motivation_away=0.3,
     )
     snap.id = None
     return snap
-
-
-from datetime import datetime  # noqa: E402 (already imported above, kept for _neutral_features)
