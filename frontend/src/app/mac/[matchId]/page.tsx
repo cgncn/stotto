@@ -8,6 +8,7 @@ import { buildExplanation, safeVal } from "@/lib/explanation";
 import { SkeletonCard, SkeletonBlock } from "@/components/Skeleton";
 import ConfidenceRing from "@/components/ConfidenceRing";
 import { SubscriberGate } from "@/components/SubscriberGate";
+import { BlurPlaceholder } from "@/components/BlurPlaceholder";
 import type { MatchFeatures } from "@/lib/api";
 
 const RadarChart = dynamic(() => import("@/components/RadarChart"), { ssr: false });
@@ -485,7 +486,7 @@ export default function MatchDetailPage() {
 
       {/* ── Odds movement ─────────────────────────────────────────────────────── */}
       {hasOddsMovement ? (
-        <SubscriberGate>
+        <SubscriberGate fallback={<BlurPlaceholder section="odds" />}>
           <div className="bg-white rounded-xl shadow p-5">
             <h2 className="text-sm font-bold text-gray-700 mb-3">Oran Hareketi & Sharp Money</h2>
             <div className="grid grid-cols-3 gap-3 mb-4">
@@ -596,7 +597,7 @@ export default function MatchDetailPage() {
 
       {/* ── Radar + Team comparison ───────────────────────────────────────────── */}
       {feats?.home && feats?.away ? (
-        <SubscriberGate>
+        <SubscriberGate fallback={<BlurPlaceholder section="radar" />}>
           <div className="bg-white rounded-xl shadow p-5">
             <h2 className="text-sm font-bold text-gray-700 mb-4">Takım Karşılaştırması</h2>
             <div className="flex flex-col sm:flex-row gap-4 items-center">
@@ -742,7 +743,7 @@ export default function MatchDetailPage() {
 
       {/* ── Score history ─────────────────────────────────────────────────────── */}
       {history.length > 0 && (
-        <SubscriberGate>
+        <SubscriberGate fallback={<BlurPlaceholder section="history" />}>
           <div className="bg-white rounded-xl shadow p-5">
             <h2 className="text-sm font-bold text-gray-700 mb-3">Skor Değişim Geçmişi</h2>
             <div className="overflow-x-auto">
