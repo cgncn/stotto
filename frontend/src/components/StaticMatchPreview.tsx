@@ -1,6 +1,7 @@
 // frontend/src/components/StaticMatchPreview.tsx
 "use client";
 
+import { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import ConfidenceRing from "./ConfidenceRing";
 
@@ -66,7 +67,7 @@ const BADGE: Record<string, string> = {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function SectionHeader({ children }: { children: React.ReactNode }) {
+function SectionHeader({ children }: { children: ReactNode }) {
   return (
     <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 pt-4 border-t border-gray-50">
       {children}
@@ -150,7 +151,7 @@ function SharpMoneyRow() {
         <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full ${signal > 0 ? "bg-red-500" : "bg-blue-500"}`}
-            style={{ width: `${abs * 100}%`, marginLeft: signal > 0 ? "auto" : 0 }}
+            style={{ width: `${abs * 100}%`, marginLeft: signal > 0 ? "auto" : "0" }}
           />
         </div>
         <p className="text-[10px] text-gray-400 mt-0.5">← Ev · Dep →</p>
