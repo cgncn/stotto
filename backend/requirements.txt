@@ -25,7 +25,7 @@ python-dateutil==2.9.0
 
 # Config
 pydantic-settings==2.7.0
-pydantic==2.10.4
+pydantic[email]==2.10.4
 
 # iyzico
 iyzipay>=1.0.46
