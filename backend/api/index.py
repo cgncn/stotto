@@ -1,14 +1,12 @@
 import sys
 import os
 
-# Add backend root to sys.path so "from app.main import app" works.
-# With @vercel/python + includeFiles, __file__ is /var/task/backend/api/index.py
-# so dirname(dirname(...)) = /var/task/backend  → finds app/ package.
+# With Vercel `functions` + includeFiles:"backend/**",
+# files are deployed at /var/task/backend/**.
+# __file__ = /var/task/backend/api/index.py
+# dirname(dirname(__file__)) = /var/task/backend  → contains app/
 _backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_cwd = os.getcwd()
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
 
-for _p in (_backend_root, _cwd):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from app.main import app  # noqa: E402
+from app.main import app  # noqa: F401
