@@ -6,8 +6,9 @@
       "framework": "nextjs"
     },
     "backend": {
-      "entrypoint": "backend/api/index.py",
-      "routePrefix": "/_/backend"
+      "entrypoint": "backend",
+      "routePrefix": "/_/backend",
+      "runtime": "python3.12"
     }
   }
 }

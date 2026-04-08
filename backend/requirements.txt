@@ -30,6 +30,8 @@ pydantic[email]==2.10.4
 # iyzico
 iyzipay>=1.0.46
 
+eval_type_backport==0.2.2
+
 # Testing
 pytest==8.3.4
 pytest-asyncio==0.25.0

@@ -1,9 +1,15 @@
 import sys
 import os
 
-# Add the backend root directory to sys.path so `app` package is importable
-backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if backend_root not in sys.path:
-    sys.path.insert(0, backend_root)
+# When Vercel runs this, CWD is the service root (backend/).
+# Ensure it's on sys.path so `app` package is importable.
+cwd = os.getcwd()
+if cwd not in sys.path:
+    sys.path.insert(0, cwd)
 
-from app.main import app  # noqa: E402 — must be after sys.path setup
+# Also add the directory containing this file's parent (belt-and-suspenders)
+here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if here not in sys.path:
+    sys.path.insert(0, here)
+
+from app.main import app  # noqa: E402
