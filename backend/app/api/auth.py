@@ -1,6 +1,8 @@
+import traceback
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from passlib.context import CryptContext
 from jose import jwt
 from typing import Optional
@@ -64,7 +66,12 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == body.email).first()
-    if not user or not verify_password(body.password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="E-posta veya şifre hatalı")
-    return TokenResponse(access_token=create_access_token(user.id))
+    try:
+        user = db.query(models.User).filter(models.User.email == body.email).first()
+        if not user or not verify_password(body.password, user.hashed_password):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="E-posta veya şifre hatalı")
+        return TokenResponse(access_token=create_access_token(user.id))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc), "traceback": traceback.format_exc()})
