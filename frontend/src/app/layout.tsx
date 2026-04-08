@@ -3,6 +3,8 @@ import "./globals.css";
 import Link from "next/link";
 import { AuthProvider } from "@/context/AuthContext";
 import { ClientNav } from "@/components/ClientNav";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 export const metadata: Metadata = {
   title: "STOTTO — Spor Toto Karar Destek",
@@ -29,6 +31,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </nav>
           <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
         </AuthProvider>
+        <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );
