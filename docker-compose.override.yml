@@ -10,7 +10,21 @@ services:
   backend:
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
+
+  celery-worker:
+    volumes:
+      - ./backend:/app
+
+  celery-beat:
+    volumes:
+      - ./backend:/app
 
   frontend:
     ports:
       - "3001:3001"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
