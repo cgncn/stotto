@@ -1,14 +1,15 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: '0.5'
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -17,8 +18,9 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: '0.25'
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -29,10 +31,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: '1.0'
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     env_file: .env
-    ports:
-      - "8000:8000"
     volumes:
       - ./backend:/app
     depends_on:
@@ -45,6 +48,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: '1.0'
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
     env_file: .env
     volumes:
@@ -59,6 +65,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: '0.25'
     command: celery -A app.workers.celery_app beat --loglevel=info --scheduler celery.beat:PersistentScheduler --schedule /tmp/celerybeat-schedule
     env_file: .env
     volumes:
@@ -73,13 +82,14 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: '1.0'
     command: sh -c "npm run dev -- -p 3001 -H 0.0.0.0"
     env_file: .env
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
       INTERNAL_API_URL: http://backend:8000
-    ports:
-      - "3001:3001"
     volumes:
       - ./frontend:/app
       - /app/node_modules

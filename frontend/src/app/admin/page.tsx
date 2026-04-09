@@ -653,6 +653,7 @@ export default function AdminPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
 
   const [pools, setPools] = useState<Pool[]>([]);
   const [selectedPool, setSelectedPool] = useState<number | null>(null);
@@ -700,6 +701,7 @@ export default function AdminPage() {
   async function doLogin(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
+    setLoginLoading(true);
     try {
       const res = await fetch(`${BASE}/auth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -709,6 +711,7 @@ export default function AdminPage() {
       if (!res.ok) { setAuthError(data.detail ?? "Giriş başarısız"); return; }
       login(data.access_token);
     } catch { setAuthError("Sunucuya bağlanılamadı"); }
+    finally { setLoginLoading(false); }
   }
 
   async function importWeek() {
@@ -771,8 +774,20 @@ export default function AdminPage() {
             <input type="password" required placeholder="Şifre" value={password} onChange={e => setPassword(e.target.value)}
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500" />
             {authError && <p className="text-red-400 text-xs">{authError}</p>}
-            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors">
-              Giriş Yap
+            <button
+              type="submit"
+              disabled={loginLoading}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {loginLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                  </svg>
+                  Giriş yapılıyor…
+                </span>
+              ) : "Giriş Yap"}
             </button>
           </form>
         </div>

@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # App
     environment: str = "development"
     log_level: str = "INFO"
+    allowed_origins: list[str] = ["http://localhost:3000", "https://stotto.com.tr", "https://www.stotto.com.tr"]
 
 
 settings = Settings()

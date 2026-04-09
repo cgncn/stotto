@@ -1,18 +1,20 @@
+import re
 import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from passlib.context import CryptContext
 from jose import jwt
-from typing import Optional
-
-from pydantic import BaseModel, EmailStr, Field
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.base import get_db
 from app.db import models
+from app.db.base import get_db
+from app.limiter import limiter
 
 router = APIRouter()
 
@@ -38,19 +40,42 @@ def hash_password(plain: str) -> str:
 
 
 def create_access_token(user_id: int) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
-    payload = {"sub": str(user_id), "exp": expire}
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=settings.jwt_expire_minutes)
+    payload = {
+        "sub": str(user_id),
+        "exp": expire,
+        "iat": now,
+        "jti": str(uuid.uuid4()),
+    }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str
     display_name: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        errors = []
+        if len(v) < 8:
+            errors.append("en az 8 karakter")
+        if not re.search(r"[A-Z]", v):
+            errors.append("en az 1 büyük harf")
+        if not re.search(r"\d", v):
+            errors.append("en az 1 rakam")
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-\+\=\[\]\\\/]', v):
+            errors.append("en az 1 özel karakter")
+        if errors:
+            raise ValueError("Şifre şu koşulları sağlamalı: " + ", ".join(errors))
+        return v
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def register(request: Request, body: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(models.User).filter_by(email=body.email).first():
         raise HTTPException(status_code=400, detail="Bu e-posta zaten kayıtlı")
     user = models.User(
@@ -65,7 +90,8 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
     try:
         user = db.query(models.User).filter(models.User.email == body.email).first()
         if not user or not verify_password(body.password, user.hashed_password):

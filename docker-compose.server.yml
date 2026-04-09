@@ -1,0 +1,35 @@
+services:
+  postgres:
+    restart: always
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  redis:
+    restart: always
+    ports:
+      - "127.0.0.1:6380:6379"
+
+  backend:
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes: []
+
+  celery-worker:
+    restart: always
+    volumes: []
+
+  celery-beat:
+    restart: always
+    volumes: []
+
+  frontend:
+    restart: always
+    command: node .next/standalone/server.js
+    environment:
+      PORT: "3001"
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes: []
