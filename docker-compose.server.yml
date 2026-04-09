@@ -26,10 +26,17 @@ services:
 
   frontend:
     restart: always
-    command: node .next/standalone/server.js
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        NEXT_PUBLIC_API_URL: https://api.stotto.com.tr
+    command: ["node", "server.js"]
     environment:
       PORT: "3001"
       HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_URL: https://api.stotto.com.tr
     ports:
       - "127.0.0.1:3001:3001"
     volumes: []
