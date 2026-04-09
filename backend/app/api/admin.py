@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session, joinedload
 
@@ -8,9 +8,190 @@ from app.db.base import get_db
 from app.db import models
 from app.api.deps import require_admin
 from typing import Any
-from app.schemas.admin import WeeklyImportRequest, ManualOverrideRequest
+from app.schemas.admin import WeeklyImportRequest, ManualOverrideRequest, ResolveListRequest
 
 router = APIRouter()
+
+
+# ── Fixture lookup ─────────────────────────────────────────────────────────────
+
+@router.get("/fixtures/search")
+def search_fixtures_by_date(
+    date: str = Query(..., description="ISO date, e.g. 2026-04-10"),
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Search API-Football for fixtures on a given date (passthrough)."""
+    from app.adapters.api_football import APIFootballAdapter, APIFootballError
+    try:
+        adapter = APIFootballAdapter(db)
+        data = adapter._get("fixtures", {"date": date})
+    except APIFootballError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    results = []
+    for item in data.get("response", []):
+        fix = item.get("fixture", {})
+        teams = item.get("teams", {})
+        league = item.get("league", {})
+        results.append({
+            "fixture_id": fix.get("id"),
+            "home": teams.get("home", {}).get("name", ""),
+            "away": teams.get("away", {}).get("name", ""),
+            "kickoff": fix.get("date"),
+            "league": league.get("name", ""),
+            "country": league.get("country", ""),
+        })
+    return results
+
+
+# ── Fixture resolve-list ───────────────────────────────────────────────────────
+
+import re
+import unicodedata
+from difflib import SequenceMatcher
+
+_CHAR_MAP = {
+    'ş': 's', 'ğ': 'g', 'ü': 'u', 'ı': 'i', 'ç': 'c', 'ö': 'o',
+    'Ş': 'S', 'Ğ': 'G', 'Ü': 'U', 'İ': 'I', 'Ç': 'C', 'Ö': 'O',
+}
+
+_ALIASES: dict[str, str] = {
+    "b. dortmund":    "borussia dortmund",
+    "b. leverkusen":  "bayer leverkusen",
+    "basaksehir fk":  "istanbul basaksehir",
+    "basaksehir":     "istanbul basaksehir",
+    "gaziantep fk":   "gaziantep",
+    "atletico":       "atletico madrid",
+}
+
+_STRIP_RE = re.compile(r'\b(a\.s\.|f\.k\.|a\.s|f\.k|fc|cf|sc)\b')
+_MATCH_LINE_RE = re.compile(r'^(\d+)\s+(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}:\d{2})\s+(.+)$')
+
+
+def _norm(name: str) -> str:
+    for tr, en in _CHAR_MAP.items():
+        name = name.replace(tr, en)
+    name = unicodedata.normalize('NFKD', name)
+    name = ''.join(c for c in name if not unicodedata.combining(c))
+    name = name.lower()
+    name = _STRIP_RE.sub('', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    return _ALIASES.get(name, name)
+
+
+def _score(inp: str, cand: str) -> float:
+    s1 = SequenceMatcher(None, inp, cand).ratio()
+    in_tok = set(inp.split())
+    s2 = len(in_tok & set(cand.split())) / max(len(in_tok), 1)
+    longest = max(in_tok, key=len) if in_tok else ""
+    s3 = 1.0 if longest and longest in cand else 0.0
+    return max(s1, s2, s3)
+
+
+def _best_split(teams_str: str, candidates: list[dict]) -> tuple[str, str]:
+    """Try every '-' split and return the home/away that scores best against candidates."""
+    positions = [i for i, c in enumerate(teams_str) if c == '-']
+    if not positions:
+        return teams_str, ""
+    if not candidates:
+        # fall back to first '-'
+        i = positions[0]
+        return teams_str[:i].strip(), teams_str[i + 1:].strip()
+    best_score = -1.0
+    best_split = (teams_str[:positions[0]].strip(), teams_str[positions[0] + 1:].strip())
+    for pos in positions:
+        home_try = _norm(teams_str[:pos].strip())
+        away_try = _norm(teams_str[pos + 1:].strip())
+        for c in candidates:
+            combined = _score(home_try, _norm(c["home"])) + _score(away_try, _norm(c["away"]))
+            if combined > best_score:
+                best_score = combined
+                best_split = (teams_str[:pos].strip(), teams_str[pos + 1:].strip())
+    return best_split
+
+
+@router.post("/fixtures/resolve-list")
+def resolve_fixture_list(
+    body: ResolveListRequest,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Parse raw nesine.com match list text and resolve each row to an API-Football fixture ID."""
+    from app.adapters.api_football import APIFootballAdapter, APIFootballError
+
+    # ── 1. Parse lines ─────────────────────────────────────────────────────────
+    parsed: list[dict] = []
+    for line in body.raw_text.splitlines():
+        m = _MATCH_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        seq, dd, mm, yyyy, time_, teams_str = (
+            int(m.group(1)), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
+        )
+        iso_date = f"{yyyy}-{mm}-{dd}"
+        parsed.append({"seq": seq, "date": iso_date, "time": time_, "teams_str": teams_str})
+
+    if not parsed:
+        raise HTTPException(status_code=422, detail="Maç satırı bulunamadı — metni kontrol edin")
+
+    # ── 2. Fetch API-Football per unique date ──────────────────────────────────
+    adapter = APIFootballAdapter(db)
+    fixtures_by_date: dict[str, list[dict]] = {}
+    for date in {p["date"] for p in parsed}:
+        try:
+            data = adapter._get("fixtures", {"date": date})
+        except APIFootballError as exc:
+            raise HTTPException(status_code=502, detail=f"API-Football hatası ({date}): {exc}")
+        fixtures_by_date[date] = [
+            {
+                "fixture_id": item["fixture"]["id"],
+                "home": item["teams"]["home"]["name"],
+                "away": item["teams"]["away"]["name"],
+                "kickoff": item["fixture"].get("date", ""),
+                "league": item.get("league", {}).get("name", ""),
+            }
+            for item in data.get("response", [])
+        ]
+
+    # ── 3. Match each row ──────────────────────────────────────────────────────
+    resolved = []
+    for p in parsed:
+        candidates_pool = fixtures_by_date.get(p["date"], [])
+        home_raw, away_raw = _best_split(p["teams_str"], candidates_pool)
+        home_n, away_n = _norm(home_raw), _norm(away_raw)
+
+        scored = []
+        for c in candidates_pool:
+            home_cn, away_cn = _norm(c["home"]), _norm(c["away"])
+            combined = _score(home_n, home_cn) + _score(away_n, away_cn)
+            scored.append((combined, c))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top3 = [
+            {"fixture_id": c["fixture_id"], "home": c["home"], "away": c["away"],
+             "confidence": round(score, 3)}
+            for score, c in scored[:3]
+        ]
+
+        best_score, best = scored[0] if scored else (0.0, None)
+        matched = best_score >= 1.60 and best is not None
+
+        resolved.append({
+            "seq": p["seq"],
+            "date": p["date"],
+            "home_input": home_raw,
+            "away_input": away_raw,
+            "matched": matched,
+            "fixture_id": best["fixture_id"] if matched else None,
+            "home_found": best["home"] if matched else None,
+            "away_found": best["away"] if matched else None,
+            "confidence": round(best_score, 3),
+            "candidates": top3,
+        })
+
+    resolved.sort(key=lambda r: r["seq"])
+    return {"week_code": body.week_code, "resolved": resolved}
 
 
 # ── Admin data endpoints ───────────────────────────────────────────────────────

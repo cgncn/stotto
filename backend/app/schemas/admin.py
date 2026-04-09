@@ -23,6 +23,11 @@ class WeeklyImportRequest(BaseModel):
         return [FixtureImportItem(external_id=eid) for eid in self.fixture_external_ids]
 
 
+class ResolveListRequest(BaseModel):
+    raw_text: str
+    week_code: str
+
+
 class ManualOverrideRequest(BaseModel):
     weekly_pool_match_id: int
     primary_pick: str

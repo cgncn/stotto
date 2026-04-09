@@ -663,6 +663,20 @@ export default function AdminPage() {
   const [fixtureIds, setFixtureIds] = useState("");
   const [opsMsg, setOpsMsg] = useState<string | null>(null);
 
+  interface ResolvedFixture {
+    seq: number; date: string;
+    home_input: string; away_input: string;
+    matched: boolean; fixture_id: number | null;
+    home_found: string | null; away_found: string | null;
+    confidence: number;
+    candidates: { fixture_id: number; home: string; away: string; confidence: number }[];
+  }
+  const [rawMatchList, setRawMatchList] = useState("");
+  const [resolveWeekCode, setResolveWeekCode] = useState("");
+  const [resolvedMatches, setResolvedMatches] = useState<ResolvedFixture[]>([]);
+  const [resolveLoading, setResolveLoading] = useState(false);
+  const [rowOverrides, setRowOverrides] = useState<Record<number, number | null>>({});
+
   const loadPools = useCallback(async () => {
     try {
       const data: Pool[] = await apiFetch("/admin/pools");
@@ -692,6 +706,33 @@ export default function AdminPage() {
     try {
       const r = await apiFetch("/admin/weekly-import", {
         method: "POST", body: JSON.stringify({ week_code: weekCode, fixture_external_ids: ids }),
+      });
+      setOpsMsg(`${r.detail} — task: ${r.task_id}`);
+    } catch (e: unknown) { setOpsMsg((e as Error).message); }
+  }
+
+  async function resolveList() {
+    setResolveLoading(true);
+    setResolvedMatches([]);
+    setRowOverrides({});
+    try {
+      const data = await apiFetch("/admin/fixtures/resolve-list", {
+        method: "POST",
+        body: JSON.stringify({ raw_text: rawMatchList, week_code: resolveWeekCode }),
+      });
+      setResolvedMatches(data.resolved);
+    } catch (e: unknown) { setOpsMsg((e as Error).message); }
+    finally { setResolveLoading(false); }
+  }
+
+  async function importResolved() {
+    const ids = resolvedMatches
+      .map(m => rowOverrides[m.seq] !== undefined ? rowOverrides[m.seq] : m.fixture_id)
+      .filter((id): id is number => id != null);
+    try {
+      const r = await apiFetch("/admin/weekly-import", {
+        method: "POST",
+        body: JSON.stringify({ week_code: resolveWeekCode, fixture_external_ids: ids }),
       });
       setOpsMsg(`${r.detail} — task: ${r.task_id}`);
     } catch (e: unknown) { setOpsMsg((e as Error).message); }
@@ -777,6 +818,81 @@ export default function AdminPage() {
                     {opsMsg} <button onClick={() => setOpsMsg(null)} className="ml-1 text-emerald-500">×</button>
                   </div>
                 )}
+
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Listeden İçe Aktar</div>
+                  <input placeholder="Hafta kodu (örn: 2026-W15)" value={resolveWeekCode} onChange={e => setResolveWeekCode(e.target.value)}
+                    className="w-full bg-zinc-800 text-white text-xs rounded px-2 py-1.5 mb-2 placeholder-zinc-600 border border-zinc-700" />
+                  <textarea
+                    placeholder={"Nesine.com maç listesini buraya yapıştırın…\n1\t10.04.2026 20:00\tBeşiktaş A.Ş.-Antalyaspor\n…"}
+                    value={rawMatchList} onChange={e => setRawMatchList(e.target.value)}
+                    rows={5} className="w-full bg-zinc-800 text-white text-xs rounded px-2 py-1.5 mb-2 placeholder-zinc-600 border border-zinc-700 resize-none font-mono" />
+                  <button onClick={resolveList} disabled={resolveLoading || !rawMatchList.trim() || !resolveWeekCode.trim()}
+                    className="w-full py-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 text-white text-xs rounded font-medium transition-colors mb-3">
+                    {resolveLoading ? "Çözülüyor…" : "Çöz"}
+                  </button>
+
+                  {resolvedMatches.length > 0 && (() => {
+                    const allResolved = resolvedMatches.every(m =>
+                      (rowOverrides[m.seq] !== undefined ? rowOverrides[m.seq] : m.fixture_id) != null
+                    );
+                    const resolvedCount = resolvedMatches.filter(m =>
+                      (rowOverrides[m.seq] !== undefined ? rowOverrides[m.seq] : m.fixture_id) != null
+                    ).length;
+                    return (
+                      <div className="border border-zinc-700 rounded overflow-hidden mb-2">
+                        <div className="max-h-80 overflow-y-auto divide-y divide-zinc-800">
+                          {resolvedMatches.map(m => {
+                            const effectiveId = rowOverrides[m.seq] !== undefined ? rowOverrides[m.seq] : m.fixture_id;
+                            const rowColor = effectiveId != null
+                              ? (m.matched ? "bg-emerald-950/30" : "bg-amber-950/30")
+                              : "bg-red-950/30";
+                            return (
+                              <div key={m.seq} className={`px-2 py-1.5 text-xs ${rowColor}`}>
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <span className="text-zinc-500 font-mono w-4 shrink-0">{m.seq}</span>
+                                  <span className="text-zinc-300 flex-1 truncate">{m.home_input} – {m.away_input}</span>
+                                  {effectiveId != null
+                                    ? <span className="font-mono text-zinc-400 shrink-0">{effectiveId}</span>
+                                    : <span className="text-red-400 shrink-0">—</span>
+                                  }
+                                </div>
+                                {m.matched && m.home_found && (
+                                  <div className="text-[10px] text-emerald-400 pl-5 truncate">
+                                    ✓ {m.home_found} – {m.away_found}
+                                  </div>
+                                )}
+                                {!m.matched && m.candidates.length > 0 && (
+                                  <select
+                                    value={rowOverrides[m.seq] ?? ""}
+                                    onChange={e => setRowOverrides(prev => ({ ...prev, [m.seq]: e.target.value ? parseInt(e.target.value) : null }))}
+                                    className="mt-1 w-full bg-zinc-800 text-zinc-200 text-[10px] rounded px-1.5 py-1 border border-amber-700">
+                                    <option value="">— seçin —</option>
+                                    {m.candidates.map(c => (
+                                      <option key={c.fixture_id} value={c.fixture_id}>
+                                        {c.home} – {c.away} ({c.fixture_id})
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                {!m.matched && m.candidates.length === 0 && (
+                                  <input type="number" placeholder="Fixture ID girin"
+                                    value={rowOverrides[m.seq] ?? ""}
+                                    onChange={e => setRowOverrides(prev => ({ ...prev, [m.seq]: e.target.value ? parseInt(e.target.value) : null }))}
+                                    className="mt-1 w-full bg-zinc-800 text-zinc-200 text-[10px] rounded px-1.5 py-1 border border-red-700 placeholder-zinc-600" />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <button onClick={importResolved} disabled={!allResolved}
+                          className="w-full py-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-xs font-medium transition-colors">
+                          Tümünü İçe Aktar ({resolvedCount}/{resolvedMatches.length})
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
 
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Haftalık İçe Aktar</div>
