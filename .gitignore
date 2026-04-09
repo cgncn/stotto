@@ -25,6 +25,11 @@ frontend/.env
 # Docker
 *.log
 
+# Server secrets (never commit)
+.env.server
+backend/test_iyzico_webhook.db
+frontend/tsconfig.tsbuildinfo
+
 # OS
 .DS_Store
 Thumbs.db
