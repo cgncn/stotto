@@ -65,8 +65,8 @@ _ALIASES: dict[str, str] = {
 _STRIP_RE = re.compile(r'\b(a\.s\.|f\.k\.|a\.s|f\.k|fc|cf|sc)\b')
 _MATCH_LINE_RE = re.compile(r'^(\d+)\s+(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}:\d{2})\s+(.+)$')
 
-# Leagues commonly featured in Spor Toto — used as fallback when date-only query is blocked
-_SPOR_TOTO_LEAGUES = [203, 78, 39, 140, 135, 61, 2, 3, 848]
+# Last-resort hardcoded fallback (used only if league-list fetch also fails)
+_FALLBACK_LEAGUES = [203, 78, 39, 140, 135, 61, 2, 3, 848]
 
 
 def _season_for_date(date_str: str) -> int:
@@ -75,11 +75,29 @@ def _season_for_date(date_str: str) -> int:
     return year if month >= 7 else year - 1
 
 
-def _fetch_fixtures_for_date(adapter: Any, date: str) -> list[dict]:
-    """Fetch all fixtures for a date.
+def _fetch_all_league_ids(adapter: Any, season: int) -> list[int]:
+    """Return every active league ID for the season from API-Football.
 
-    Tries the unrestricted date-only query first; if the plan blocks it (403 / token error)
-    falls back to querying each known Spor Toto league individually.
+    Falls back to the hardcoded list if the leagues endpoint is also restricted.
+    """
+    from app.adapters.api_football import APIFootballError
+    try:
+        data = adapter._get("leagues", {"season": season, "current": "true"})
+        ids = [item["league"]["id"] for item in data.get("response", []) if item.get("league", {}).get("id")]
+        if ids:
+            return ids
+    except APIFootballError:
+        pass
+    return _FALLBACK_LEAGUES
+
+
+def _fetch_fixtures_for_date(adapter: Any, date: str, league_ids: list[int] | None = None) -> list[dict]:
+    """Fetch all fixtures for a date across all leagues.
+
+    1. Try the unrestricted date-only query (requires higher API plan).
+    2. If blocked, fall back to querying every active league individually.
+    The caller can pass a pre-fetched league_ids list to avoid re-fetching it
+    per date when resolving multiple dates in one request.
     """
     from app.adapters.api_football import APIFootballError
     try:
@@ -87,15 +105,17 @@ def _fetch_fixtures_for_date(adapter: Any, date: str) -> list[dict]:
         results = data.get("response", [])
         if results:
             return results
-        # Empty response but no error — could still be a plan restriction; fall through
     except APIFootballError:
         pass
 
-    # Fallback: query per known league
+    # Fallback: query every league for this date
     season = _season_for_date(date)
+    if league_ids is None:
+        league_ids = _fetch_all_league_ids(adapter, season)
+
     all_items: list[dict] = []
     seen: set[int] = set()
-    for lid in _SPOR_TOTO_LEAGUES:
+    for lid in league_ids:
         try:
             data = adapter._get("fixtures", {"league": lid, "season": season, "date": date})
             for item in data.get("response", []):
@@ -176,9 +196,15 @@ def resolve_fixture_list(
 
     # ── 2. Fetch API-Football per unique date ──────────────────────────────────
     adapter = APIFootballAdapter(db)
+    # Pre-fetch the full league list once so it's reused across all dates
+    unique_dates = {p["date"] for p in parsed}
+    sample_date = next(iter(unique_dates))
+    season = _season_for_date(sample_date)
+    league_ids = _fetch_all_league_ids(adapter, season)
+
     fixtures_by_date: dict[str, list[dict]] = {}
-    for date in {p["date"] for p in parsed}:
-        items = _fetch_fixtures_for_date(adapter, date)
+    for date in unique_dates:
+        items = _fetch_fixtures_for_date(adapter, date, league_ids=league_ids)
         fixtures_by_date[date] = [
             {
                 "fixture_id": item["fixture"]["id"],
