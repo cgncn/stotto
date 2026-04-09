@@ -70,34 +70,73 @@ _FALLBACK_LEAGUES = [203, 78, 39, 140, 135, 61, 2, 3, 848]
 
 
 def _season_for_date(date_str: str) -> int:
-    """Return the API-Football season year for a given ISO date string."""
     year, month = int(date_str[:4]), int(date_str[5:7])
     return year if month >= 7 else year - 1
 
 
-def _fetch_all_league_ids(adapter: Any, season: int) -> list[int]:
-    """Return every active league ID for the season from API-Football.
+def _coverage_score(item: dict) -> int:
+    """Score a league by how complete its API coverage is.
 
-    Falls back to the hardcoded list if the leagues endpoint is also restricted.
+    Top-division leagues have full coverage (odds, predictions, lineups, stats).
+    Lower divisions have partial coverage. Higher score = more likely top division.
+    """
+    seasons = item.get("seasons", [])
+    current = next((s for s in seasons if s.get("current")), {})
+    cov = current.get("coverage", {})
+    fix = cov.get("fixtures", {})
+    return sum([
+        bool(cov.get("odds")),
+        bool(cov.get("predictions")),
+        bool(cov.get("standings")),
+        bool(cov.get("players")),
+        bool(fix.get("statistics_fixtures")),
+        bool(fix.get("statistics_players")),
+        bool(fix.get("lineups")),
+        bool(fix.get("events")),
+    ])
+
+
+def _fetch_main_league_ids(adapter: Any, season: int) -> list[int]:
+    """Return one top-division league per country plus all international competitions.
+
+    Fetches the full active league list in one API call, groups by country,
+    and picks the league with the highest coverage score (top divisions have
+    full odds/stats/lineup coverage; lower divisions don't).
+    Falls back to the hardcoded list if the endpoint is restricted.
     """
     from app.adapters.api_football import APIFootballError
     try:
         data = adapter._get("leagues", {"season": season, "current": "true"})
-        ids = [item["league"]["id"] for item in data.get("response", []) if item.get("league", {}).get("id")]
-        if ids:
-            return ids
     except APIFootballError:
-        pass
-    return _FALLBACK_LEAGUES
+        return _FALLBACK_LEAGUES
+
+    by_country: dict[str, list[dict]] = {}
+    for item in data.get("response", []):
+        if not item.get("league", {}).get("id"):
+            continue
+        country = item.get("country", {}).get("name", "Unknown")
+        # International competitions (World, Europe, etc.) each get their own slot
+        if country in ("World", "Europe", "South America", "North America",
+                       "Asia", "Africa", "Oceania"):
+            key = f"__intl_{item['league']['id']}"
+        else:
+            key = country
+        by_country.setdefault(key, []).append(item)
+
+    selected = []
+    for leagues in by_country.values():
+        best = max(leagues, key=_coverage_score)
+        selected.append(best["league"]["id"])
+
+    return selected if selected else _FALLBACK_LEAGUES
 
 
 def _fetch_fixtures_for_date(adapter: Any, date: str, league_ids: list[int] | None = None) -> list[dict]:
-    """Fetch all fixtures for a date across all leagues.
+    """Fetch fixtures for a date.
 
-    1. Try the unrestricted date-only query (requires higher API plan).
-    2. If blocked, fall back to querying every active league individually.
-    The caller can pass a pre-fetched league_ids list to avoid re-fetching it
-    per date when resolving multiple dates in one request.
+    1. Try date-only query (requires higher plan).
+    2. Fall back to querying one main league per country.
+    Pass pre-fetched league_ids to avoid re-fetching across multiple dates.
     """
     from app.adapters.api_football import APIFootballError
     try:
@@ -108,10 +147,9 @@ def _fetch_fixtures_for_date(adapter: Any, date: str, league_ids: list[int] | No
     except APIFootballError:
         pass
 
-    # Fallback: query every league for this date
     season = _season_for_date(date)
     if league_ids is None:
-        league_ids = _fetch_all_league_ids(adapter, season)
+        league_ids = _fetch_main_league_ids(adapter, season)
 
     all_items: list[dict] = []
     seen: set[int] = set()
