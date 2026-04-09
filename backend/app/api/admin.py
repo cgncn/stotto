@@ -65,8 +65,92 @@ _ALIASES: dict[str, str] = {
 _STRIP_RE = re.compile(r'\b(a\.s\.|f\.k\.|a\.s|f\.k|fc|cf|sc)\b')
 _MATCH_LINE_RE = re.compile(r'^(\d+)\s+(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}:\d{2})\s+(.+)$')
 
-# Last-resort hardcoded fallback (used only if league-list fetch also fails)
+# Last-resort hardcoded fallback (used only if all detection fails)
 _FALLBACK_LEAGUES = [203, 78, 39, 140, 135, 61, 2, 3, 848]
+
+# Map normalised keyword → league ID  (first match wins per team name)
+_TEAM_LEAGUE_HINTS: dict[str, int] = {
+    # Turkish Süper Lig (203)
+    "besiktas": 203, "galatasaray": 203, "fenerbahce": 203, "trabzonspor": 203,
+    "istanbul basaksehir": 203, "basaksehir": 203, "alanyaspor": 203, "kayserispor": 203,
+    "konyaspor": 203, "goztepe": 203, "kasimpasa": 203, "antalyaspor": 203,
+    "eyupspor": 203, "samsunspor": 203, "rizespor": 203, "gaziantep": 203,
+    "karagumruk": 203, "kocaelispor": 203, "genclerbirligi": 203, "sivasspor": 203,
+    "adana demirspor": 203, "adanaspor": 203, "ankaragucu": 203,
+    # Bundesliga (78)
+    "borussia dortmund": 78, "dortmund": 78, "bayer leverkusen": 78, "leverkusen": 78,
+    "bayern": 78, "frankfurt": 78, "rb leipzig": 78, "leipzig": 78,
+    "wolfsburg": 78, "freiburg": 78, "hoffenheim": 78, "borussia monchengladbach": 78,
+    "gladbach": 78, "werder": 78, "augsburg": 78, "mainz": 78,
+    "bochum": 78, "heidenheim": 78, "stuttgart": 78, "union berlin": 78,
+    "st. pauli": 78,
+    # Premier League (39)
+    "liverpool": 39, "chelsea": 39, "arsenal": 39, "manchester city": 39,
+    "manchester united": 39, "manchester": 39, "tottenham": 39, "newcastle": 39,
+    "brighton": 39, "fulham": 39, "everton": 39, "nottingham": 39,
+    "brentford": 39, "bournemouth": 39, "ipswich": 39, "leicester": 39,
+    "southampton": 39, "aston villa": 39, "crystal palace": 39, "west ham": 39,
+    "wolverhampton": 39, "wolves": 39,
+    # La Liga (140)
+    "real madrid": 140, "barcelona": 140, "atletico madrid": 140, "sevilla": 140,
+    "villarreal": 140, "valencia": 140, "real betis": 140, "betis": 140,
+    "osasuna": 140, "girona": 140, "celta": 140, "mallorca": 140,
+    "getafe": 140, "alaves": 140, "athletic": 140, "real sociedad": 140,
+    "espanyol": 140, "rayo vallecano": 140, "leganes": 140, "las palmas": 140,
+    "valladolid": 140,
+    # Serie A (135)
+    "juventus": 135, "ac milan": 135, "inter milan": 135, "inter": 135,
+    "napoli": 135, "roma": 135, "lazio": 135, "atalanta": 135,
+    "fiorentina": 135, "torino": 135, "bologna": 135, "parma": 135,
+    "genoa": 135, "udinese": 135, "verona": 135, "monza": 135,
+    "lecce": 135, "empoli": 135, "cagliari": 135, "como": 135, "venezia": 135,
+    # Ligue 1 (61)
+    "paris saint-germain": 61, "psg": 61, "paris": 61, "marseille": 61,
+    "lyon": 61, "monaco": 61, "lille": 61, "nice": 61,
+    "lens": 61, "rennes": 61, "strasbourg": 61, "toulouse": 61,
+    "brest": 61, "nantes": 61, "reims": 61, "montpellier": 61,
+    "saint-etienne": 61, "angers": 61,
+    # Primeira Liga Portugal (94)
+    "porto": 94, "benfica": 94, "sporting cp": 94, "sporting": 94,
+    "braga": 94, "vitoria": 94, "guimaraes": 94,
+    # Eredivisie Netherlands (88)
+    "ajax": 88, "psv": 88, "feyenoord": 88, "az alkmaar": 88, "az": 88,
+    "utrecht": 88, "twente": 88,
+    # Scottish Premiership (179)
+    "celtic": 179, "rangers": 179,
+    # Belgian Pro League (144)
+    "anderlecht": 144, "club brugge": 144, "brugge": 144, "gent": 144,
+    # Austrian Bundesliga (218)
+    "salzburg": 218, "rapid wien": 218, "sturm graz": 218,
+    # Swiss Super League (207)
+    "young boys": 207, "basel": 207, "zurich": 207,
+    # Ukrainian Premier League (332)
+    "shakhtar": 332, "dynamo kyiv": 332,
+    # Greek Super League (197)
+    "olympiakos": 197, "panathinaikos": 197, "aek": 197,
+    # Turkish 1. Lig / TFF First League (204)  — second division TR
+    # (lower priority; most weekends are Süper Lig so we don't add widely)
+}
+
+# These competition IDs are always included regardless of detected teams
+_ALWAYS_INCLUDE_LEAGUES = [2, 3, 848]  # UCL, UEL, UECL
+
+
+def _detect_leagues_from_teams(teams_strs: list[str]) -> list[int]:
+    """Detect league IDs from team name strings using keyword hints.
+
+    Normalises each string, scans _TEAM_LEAGUE_HINTS keywords, collects unique
+    league IDs, then appends _ALWAYS_INCLUDE_LEAGUES. Falls back to
+    _FALLBACK_LEAGUES when nothing is detected.
+    """
+    detected: set[int] = set()
+    for raw in teams_strs:
+        n = _norm(raw)
+        for keyword, league_id in _TEAM_LEAGUE_HINTS.items():
+            if keyword in n:
+                detected.add(league_id)
+    result = list(detected) + [lid for lid in _ALWAYS_INCLUDE_LEAGUES if lid not in detected]
+    return result if detected else _FALLBACK_LEAGUES
 
 
 def _season_for_date(date_str: str) -> int:
@@ -232,13 +316,12 @@ def resolve_fixture_list(
     if not parsed:
         raise HTTPException(status_code=422, detail="Maç satırı bulunamadı — metni kontrol edin")
 
-    # ── 2. Fetch API-Football per unique date ──────────────────────────────────
+    # ── 2. Detect leagues from team names, then fetch fixtures ─────────────────
     adapter = APIFootballAdapter(db)
-    # Pre-fetch the full league list once so it's reused across all dates
+    # Collect all team-string fragments from every parsed line
+    team_tokens = [p["teams_str"] for p in parsed]
+    league_ids = _detect_leagues_from_teams(team_tokens)
     unique_dates = {p["date"] for p in parsed}
-    sample_date = next(iter(unique_dates))
-    season = _season_for_date(sample_date)
-    league_ids = _fetch_all_league_ids(adapter, season)
 
     fixtures_by_date: dict[str, list[dict]] = {}
     for date in unique_dates:
