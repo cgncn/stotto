@@ -216,11 +216,13 @@ def _fetch_main_league_ids(adapter: Any, season: int) -> list[int]:
 
 
 def _fetch_fixtures_for_date(adapter: Any, date: str, league_ids: list[int] | None = None) -> list[dict]:
-    """Fetch fixtures for a date.
+    """Fetch fixtures for a specific date.
 
-    1. Try date-only query (requires higher plan).
-    2. Fall back to querying one main league per country.
-    Pass pre-fetched league_ids to avoid re-fetching across multiple dates.
+    Strategy (free-tier compatible):
+    1. Try date-only query — works on paid plans.
+    2. For each detected league: try league+season+date (may work on some plans).
+    3. For each league that blocked step 2: fetch full league+season, filter by date in Python.
+       This is always available on the free tier.
     """
     from app.adapters.api_football import APIFootballError
     try:
@@ -233,7 +235,7 @@ def _fetch_fixtures_for_date(adapter: Any, date: str, league_ids: list[int] | No
 
     season = _season_for_date(date)
     if league_ids is None:
-        league_ids = _fetch_main_league_ids(adapter, season)
+        league_ids = _FALLBACK_LEAGUES
 
     all_items: list[dict] = []
     seen: set[int] = set()
@@ -246,7 +248,19 @@ def _fetch_fixtures_for_date(adapter: Any, date: str, league_ids: list[int] | No
                     seen.add(fid)
                     all_items.append(item)
         except APIFootballError:
-            continue
+            # Free tier blocks date filter — fall back to full season + Python filter
+            try:
+                data = adapter._get("fixtures", {"league": lid, "season": season})
+                for item in data.get("response", []):
+                    fix_date = (item.get("fixture", {}).get("date") or "")[:10]
+                    if fix_date != date:
+                        continue
+                    fid = item.get("fixture", {}).get("id")
+                    if fid and fid not in seen:
+                        seen.add(fid)
+                        all_items.append(item)
+            except APIFootballError:
+                continue
     return all_items
 
 
@@ -316,26 +330,38 @@ def resolve_fixture_list(
     if not parsed:
         raise HTTPException(status_code=422, detail="Maç satırı bulunamadı — metni kontrol edin")
 
-    # ── 2. Detect leagues from team names, then fetch fixtures ─────────────────
+    # ── 2. Detect leagues from team names, fetch season data once per league ──────
     adapter = APIFootballAdapter(db)
-    # Collect all team-string fragments from every parsed line
     team_tokens = [p["teams_str"] for p in parsed]
     league_ids = _detect_leagues_from_teams(team_tokens)
     unique_dates = {p["date"] for p in parsed}
+    sample_date = next(iter(unique_dates))
+    season = _season_for_date(sample_date)
 
-    fixtures_by_date: dict[str, list[dict]] = {}
-    for date in unique_dates:
-        items = _fetch_fixtures_for_date(adapter, date, league_ids=league_ids)
-        fixtures_by_date[date] = [
-            {
-                "fixture_id": item["fixture"]["id"],
-                "home": item["teams"]["home"]["name"],
-                "away": item["teams"]["away"]["name"],
-                "kickoff": item["fixture"].get("date", ""),
-                "league": item.get("league", {}).get("name", ""),
-            }
-            for item in items
-        ]
+    # Fetch each league once (league+season, free-tier compatible) and group by date.
+    # This uses exactly len(league_ids) API calls regardless of how many dates we have.
+    fixtures_by_date: dict[str, list[dict]] = {d: [] for d in unique_dates}
+    seen_ids: set[int] = set()
+    for lid in league_ids:
+        try:
+            data = adapter._get("fixtures", {"league": lid, "season": season})
+            for item in data.get("response", []):
+                fix_date = (item.get("fixture", {}).get("date") or "")[:10]
+                if fix_date not in unique_dates:
+                    continue
+                fid = item.get("fixture", {}).get("id")
+                if not fid or fid in seen_ids:
+                    continue
+                seen_ids.add(fid)
+                fixtures_by_date[fix_date].append({
+                    "fixture_id": fid,
+                    "home": item["teams"]["home"]["name"],
+                    "away": item["teams"]["away"]["name"],
+                    "kickoff": item["fixture"].get("date", ""),
+                    "league": item.get("league", {}).get("name", ""),
+                })
+        except APIFootballError:
+            continue
 
     # ── 3. Match each row ──────────────────────────────────────────────────────
     resolved = []
