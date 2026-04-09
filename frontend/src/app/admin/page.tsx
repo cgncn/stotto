@@ -673,6 +673,16 @@ export default function AdminPage() {
   }
   const [rawMatchList, setRawMatchList] = useState("");
   const [resolveWeekCode, setResolveWeekCode] = useState("");
+
+  function isoWeekFromText(text: string): string {
+    const m = text.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+    if (!m) return "";
+    const date = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+    const thu = new Date(date); thu.setDate(date.getDate() - (date.getDay() + 6) % 7 + 3);
+    const jan4 = new Date(thu.getFullYear(), 0, 4);
+    const week = 1 + Math.round((thu.getTime() - jan4.getTime()) / 604800000);
+    return `${thu.getFullYear()}-W${String(week).padStart(2, "0")}`;
+  }
   const [resolvedMatches, setResolvedMatches] = useState<ResolvedFixture[]>([]);
   const [resolveLoading, setResolveLoading] = useState(false);
   const [rowOverrides, setRowOverrides] = useState<Record<number, number | null>>({});
@@ -825,9 +835,9 @@ export default function AdminPage() {
                     className="w-full bg-zinc-800 text-white text-xs rounded px-2 py-1.5 mb-2 placeholder-zinc-600 border border-zinc-700" />
                   <textarea
                     placeholder={"Nesine.com maç listesini buraya yapıştırın…\n1\t10.04.2026 20:00\tBeşiktaş A.Ş.-Antalyaspor\n…"}
-                    value={rawMatchList} onChange={e => setRawMatchList(e.target.value)}
+                    value={rawMatchList} onChange={e => { setRawMatchList(e.target.value); const wc = isoWeekFromText(e.target.value); if (wc) setResolveWeekCode(wc); }}
                     rows={5} className="w-full bg-zinc-800 text-white text-xs rounded px-2 py-1.5 mb-2 placeholder-zinc-600 border border-zinc-700 resize-none font-mono" />
-                  <button onClick={resolveList} disabled={resolveLoading || !rawMatchList.trim() || !resolveWeekCode.trim()}
+                  <button onClick={resolveList} disabled={resolveLoading || !rawMatchList.trim()}
                     className="w-full py-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 text-white text-xs rounded font-medium transition-colors mb-3">
                     {resolveLoading ? "Çözülüyor…" : "Çöz"}
                   </button>
