@@ -154,3 +154,105 @@ def test_market_support_heavy_favourite():
 def test_market_dispersion_balanced():
     result = compute_market_support(2.0, 2.0, 2.0)
     assert result["bookmaker_dispersion"] == pytest.approx(1.0, abs=0.01)
+
+
+# ── Typical-XI tests ────────────────────────────────────────────────────────
+
+from app.features.lineup import (
+    _typical_xi_from_payloads,
+    compute_lineup_penalty,
+    compute_key_absences,
+)
+
+
+def _lineup_payload(team_id: int, player_ids: list[int]) -> list[dict]:
+    return [
+        {
+            "team": {"id": team_id},
+            "startXI": [{"player": {"id": pid}} for pid in player_ids],
+        }
+    ]
+
+
+def _injury(team_id: int, player_id: int, role: str, reason: str = "Injured") -> dict:
+    return {
+        "player": {"id": player_id, "type": role},
+        "team": {"id": team_id},
+        "type": reason,
+    }
+
+
+# ── _typical_xi_from_payloads ──────────────────────────────────────────────
+
+def test_typical_xi_three_or_more_appearances():
+    payloads = [_lineup_payload(100, [1, 2, 3]) for _ in range(5)]
+    result = _typical_xi_from_payloads(payloads, team_external_id=100)
+    assert result == {1, 2, 3}
+
+
+def test_typical_xi_excludes_fringe_players():
+    """Player 99 starts only twice — below the 3-game threshold."""
+    payloads = [
+        _lineup_payload(100, [1, 2, 99]),
+        _lineup_payload(100, [1, 2, 99]),
+        _lineup_payload(100, [1, 2]),
+        _lineup_payload(100, [1, 2]),
+        _lineup_payload(100, [1, 2]),
+    ]
+    result = _typical_xi_from_payloads(payloads, team_external_id=100)
+    assert 99 not in result
+    assert {1, 2} == result
+
+
+def test_typical_xi_none_on_no_data():
+    assert _typical_xi_from_payloads([], team_external_id=100) is None
+
+
+def test_typical_xi_ignores_other_teams():
+    payloads = [_lineup_payload(999, [1, 2, 3]) for _ in range(5)]
+    result = _typical_xi_from_payloads(payloads, team_external_id=100)
+    assert result is None
+
+
+# ── compute_lineup_penalty with typical_xi ─────────────────────────────────
+
+def test_lineup_penalty_fringe_excluded_when_typical_xi_provided():
+    """Player 99 is not a typical starter — injury has zero impact."""
+    injuries = [_injury(100, 99, "Attacker")]
+    assert compute_lineup_penalty(injuries, team_id=100, typical_xi={1, 2, 3}) == 0.0
+
+
+def test_lineup_penalty_starter_counted_when_in_typical_xi():
+    injuries = [_injury(100, 1, "Attacker")]
+    penalty = compute_lineup_penalty(injuries, team_id=100, typical_xi={1, 2, 3})
+    assert penalty > 0.0
+
+
+def test_lineup_penalty_fallback_counts_all_when_typical_xi_none():
+    """Legacy path: typical_xi=None → all injured players counted."""
+    injuries = [_injury(100, 99, "Attacker")]
+    penalty_none = compute_lineup_penalty(injuries, team_id=100, typical_xi=None)
+    penalty_filtered = compute_lineup_penalty(injuries, team_id=100, typical_xi={1, 2})
+    assert penalty_none > 0.0
+    assert penalty_filtered == 0.0
+
+
+# ── compute_key_absences with typical_xi ──────────────────────────────────
+
+def test_key_absence_fringe_player_not_flagged():
+    injuries = [_injury(100, 99, "Attacker", "Injured")]
+    result = compute_key_absences(injuries, team_id=100, typical_xi={1, 2, 3})
+    assert result["key_attacker_absent"] is False
+
+
+def test_key_absence_starter_flagged():
+    injuries = [_injury(100, 1, "Defender", "Injured")]
+    result = compute_key_absences(injuries, team_id=100, typical_xi={1, 2, 3})
+    assert result["key_defender_absent"] is True
+
+
+def test_key_absence_doubtful_not_flagged():
+    """Doubtful players never count as key absences regardless of typical_xi."""
+    injuries = [_injury(100, 1, "Attacker", "Doubtful")]
+    result = compute_key_absences(injuries, team_id=100, typical_xi={1, 2, 3})
+    assert result["key_attacker_absent"] is False
