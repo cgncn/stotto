@@ -976,7 +976,7 @@ export default function AdminPage() {
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Haftayı Yeniden Hesapla</div>
                   <p className="text-xs text-zinc-600 mb-2">Seçili: {activePool?.week_code ?? "—"}</p>
-                  <button onClick={recomputePool} disabled={!selectedPool}
+                  <button onClick={() => recomputePool()} disabled={!selectedPool}
                     className="w-full py-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 text-white text-xs rounded font-medium transition-colors">
                     Yeniden Hesapla
                   </button>
