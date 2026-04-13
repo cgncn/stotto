@@ -21,7 +21,7 @@ _XG_CONVERSION_FACTOR = 0.33   # shots_on_target → xG approximation
 # ── Last-5 fixture performance ─────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(frozen=True)
 class Last5Metrics:
     goals_scored_avg: float    # normalised [0, 1]  (raw / 4, clamped)
     goals_conceded_avg: float  # normalised [0, 1]  (raw / 4, clamped)
@@ -30,7 +30,7 @@ class Last5Metrics:
 
 
 _LAST5_NEUTRAL = Last5Metrics(0.5, 0.5, 0.5, 0.5)
-_LAST5_WEIGHTS = [1.00, 0.85, 0.72, 0.61, 0.52]  # most-recent first
+_LAST5_WEIGHTS = FORM_WEIGHTS  # same decay schedule as form_score
 
 
 def _last5_from_rows(fixtures: list, team_id: int) -> Last5Metrics:
@@ -100,6 +100,8 @@ def compute_last5_from_fixtures(team_id: int, db) -> Last5Metrics:
         .all()
     )
     return _last5_from_rows(fixtures, team_id)
+
+
 _LUCKY_THRESHOLD = 0.4         # xg_luck > +0.4 per game = overperforming
 _UNLUCKY_THRESHOLD = -0.4      # xg_luck < -0.4 per game = underperforming
 
