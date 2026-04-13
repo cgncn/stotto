@@ -22,12 +22,14 @@ from app.features.form import (
     extract_form_string,
     compute_away_form,
     compute_xg_features,
+    compute_last5_from_fixtures,
 )
 from app.features.draw import compute_draw_tendency, extract_draw_features, get_draw_rate
 from app.features.lineup import (
     compute_lineup_penalty,
     compute_lineup_continuity,
     compute_key_absences,
+    build_typical_xi,
 )
 from app.features.market import compute_market_support, compute_odds_movement
 from app.features.h2h import compute_h2h_features
@@ -180,14 +182,38 @@ def _compute_match_features(db: Session, pm: models.WeeklyPoolMatch) -> None:  #
     )
 
     # ── Lineup features ───────────────────────────────────────────────────
-    home_lineup_penalty = compute_lineup_penalty(injuries_payload, home_team.external_provider_id)
-    away_lineup_penalty = compute_lineup_penalty(injuries_payload, away_team.external_provider_id)
+    # ── Typical XI (last 5 confirmed lineups) ─────────────────────────────
+    home_typical_xi = build_typical_xi(home_team.external_provider_id, db)
+    away_typical_xi = build_typical_xi(away_team.external_provider_id, db)
+
+    home_lineup_penalty = compute_lineup_penalty(
+        injuries_payload, home_team.external_provider_id, home_typical_xi
+    )
+    away_lineup_penalty = compute_lineup_penalty(
+        injuries_payload, away_team.external_provider_id, away_typical_xi
+    )
     home_lineup_cert = compute_lineup_continuity(lineups_payload, home_team.external_provider_id)
     away_lineup_cert = compute_lineup_continuity(lineups_payload, away_team.external_provider_id)
     lineup_certainty = (home_lineup_cert + away_lineup_cert) / 2.0
 
-    home_key_absences = compute_key_absences(injuries_payload, home_team.external_provider_id)
-    away_key_absences = compute_key_absences(injuries_payload, away_team.external_provider_id)
+    home_key_absences = compute_key_absences(
+        injuries_payload, home_team.external_provider_id, home_typical_xi
+    )
+    away_key_absences = compute_key_absences(
+        injuries_payload, away_team.external_provider_id, away_typical_xi
+    )
+
+    # ── Last-5 fixture performance ─────────────────────────────────────────
+    home_l5 = compute_last5_from_fixtures(fixture.home_team_id, db)
+    away_l5 = compute_last5_from_fixtures(fixture.away_team_id, db)
+    # home attacks vs away defends (both from last 5)
+    last_5_attack_edge = (
+        home_l5.goals_scored_avg - (1.0 - away_l5.goals_conceded_avg)
+    ) / 2.0 + 0.5
+    # away attacks vs home defends
+    last_5_defense_edge = (
+        away_l5.goals_scored_avg - (1.0 - home_l5.goals_conceded_avg)
+    ) / 2.0 + 0.5
 
     # ── Volatility ────────────────────────────────────────────────────────
     draw_tendency = compute_draw_tendency(**draw_feats)
@@ -276,6 +302,14 @@ def _compute_match_features(db: Session, pm: models.WeeklyPoolMatch) -> None:  #
             "away": away_feats,
             "market": market,
             "draw": draw_feats,
+            "last_5": {
+                "last_5_attack_edge": last_5_attack_edge,
+                "last_5_defense_edge": last_5_defense_edge,
+                "home_goals_scored_avg": home_l5.goals_scored_avg,
+                "home_goals_conceded_avg": home_l5.goals_conceded_avg,
+                "away_goals_scored_avg": away_l5.goals_scored_avg,
+                "away_goals_conceded_avg": away_l5.goals_conceded_avg,
+            },
         },
     )
     db.add(snapshot)
