@@ -64,6 +64,83 @@ _ALIASES: dict[str, str] = {
 
 _STRIP_RE = re.compile(r'\b(a\.s\.|f\.k\.|a\.s|f\.k|fc|cf|sc)\b')
 _MATCH_LINE_RE = re.compile(r'^(\d+)\s+(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}:\d{2})\s+(.+)$')
+_SEQ_RE = re.compile(r'^\d+$')
+_DATE_TIME_RE = re.compile(r'^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}:\d{2})$')
+
+
+def _parse_raw_text(raw_text: str) -> list[dict]:
+    """Parse match list in either single-line or multi-line Nesine format.
+
+    Single-line format (space/tab-separated per row):
+        1 17.04.2026 20:00 Antalyaspor-Konyaspor
+
+    Multi-line format (one field per line, matches separated by blank lines):
+        1
+        17.04.2026 20:00
+        Antalyaspor-Konyaspor
+
+    Returns list of dicts with keys: seq, date (ISO), time, teams_str.
+    """
+    lines = [ln.strip() for ln in raw_text.splitlines()]
+    parsed: list[dict] = []
+
+    # ── Try single-line format first ────────────────────────────────────────
+    for line in lines:
+        m = _MATCH_LINE_RE.match(line)
+        if m:
+            seq, dd, mm, yyyy, time_, teams_str = (
+                int(m.group(1)), m.group(2), m.group(3),
+                m.group(4), m.group(5), m.group(6),
+            )
+            parsed.append({"seq": seq, "date": f"{yyyy}-{mm}-{dd}",
+                           "time": time_, "teams_str": teams_str})
+
+    if parsed:
+        return parsed
+
+    # ── Fall back to multi-line format ──────────────────────────────────────
+    # Expected structure (blank lines between entries are ignored):
+    #   <seq>
+    #   <DD.MM.YYYY HH:MM>
+    #   <HomeTeam-AwayTeam>
+    i = 0
+    while i < len(lines):
+        # Skip blank lines
+        if not lines[i]:
+            i += 1
+            continue
+
+        # Expect: sequence number
+        if not _SEQ_RE.match(lines[i]):
+            i += 1
+            continue
+        seq = int(lines[i])
+
+        # Next non-blank line: date+time
+        j = i + 1
+        while j < len(lines) and not lines[j]:
+            j += 1
+        if j >= len(lines):
+            break
+        dm = _DATE_TIME_RE.match(lines[j])
+        if not dm:
+            i += 1
+            continue
+        dd, mm, yyyy, time_ = dm.group(1), dm.group(2), dm.group(3), dm.group(4)
+
+        # Next non-blank line: teams string
+        k = j + 1
+        while k < len(lines) and not lines[k]:
+            k += 1
+        if k >= len(lines):
+            break
+        teams_str = lines[k]
+
+        parsed.append({"seq": seq, "date": f"{yyyy}-{mm}-{dd}",
+                       "time": time_, "teams_str": teams_str})
+        i = k + 1
+
+    return parsed
 
 # Last-resort hardcoded fallback (used only if all detection fails)
 _FALLBACK_LEAGUES = [203, 78, 39, 140, 135, 61, 2, 3, 848]
@@ -315,17 +392,8 @@ def resolve_fixture_list(
     """Parse raw nesine.com match list text and resolve each row to an API-Football fixture ID."""
     from app.adapters.api_football import APIFootballAdapter, APIFootballError
 
-    # ── 1. Parse lines ─────────────────────────────────────────────────────────
-    parsed: list[dict] = []
-    for line in body.raw_text.splitlines():
-        m = _MATCH_LINE_RE.match(line.strip())
-        if not m:
-            continue
-        seq, dd, mm, yyyy, time_, teams_str = (
-            int(m.group(1)), m.group(2), m.group(3), m.group(4), m.group(5), m.group(6),
-        )
-        iso_date = f"{yyyy}-{mm}-{dd}"
-        parsed.append({"seq": seq, "date": iso_date, "time": time_, "teams_str": teams_str})
+    # ── 1. Parse lines (single-line or multi-line Nesine format) ───────────────
+    parsed: list[dict] = _parse_raw_text(body.raw_text)
 
     if not parsed:
         raise HTTPException(status_code=422, detail="Maç satırı bulunamadı — metni kontrol edin")
@@ -684,6 +752,10 @@ def get_admin_match_detail(
         atid = pm.fixture.away_team_id
         past_fixtures = (
             db.query(models.Fixture)
+            .options(
+                joinedload(models.Fixture.home_team),
+                joinedload(models.Fixture.away_team),
+            )
             .filter(
                 or_(
                     and_(models.Fixture.home_team_id == htid, models.Fixture.away_team_id == atid),
@@ -697,25 +769,28 @@ def get_admin_match_detail(
             .all()
         )
         for f in past_fixtures:
-            is_home = f.home_team_id == htid
-            hs = f.home_score if is_home else f.away_score
-            as_ = f.away_score if is_home else f.home_score
-            if hs is None or as_ is None:
-                result = "?"
-            elif hs > as_:
-                result = "W"
-            elif hs < as_:
-                result = "L"
-            else:
-                result = "D"
-            h2h.append({
-                "kickoff_at": f.kickoff_at.isoformat() if f.kickoff_at else None,
-                "home_team": f.home_team.name if f.home_team else "",
-                "away_team": f.away_team.name if f.away_team else "",
-                "home_score": f.home_score,
-                "away_score": f.away_score,
-                "result_from_home_perspective": result,
-            })
+            try:
+                is_home = f.home_team_id == htid
+                hs = f.home_score if is_home else f.away_score
+                as_ = f.away_score if is_home else f.home_score
+                if hs is None or as_ is None:
+                    result = "?"
+                elif hs > as_:
+                    result = "W"
+                elif hs < as_:
+                    result = "L"
+                else:
+                    result = "D"
+                h2h.append({
+                    "kickoff_at": f.kickoff_at.isoformat() if f.kickoff_at else None,
+                    "home_team": f.home_team.name if f.home_team else "",
+                    "away_team": f.away_team.name if f.away_team else "",
+                    "home_score": f.home_score,
+                    "away_score": f.away_score,
+                    "result_from_home_perspective": result,
+                })
+            except Exception:
+                pass
 
     # Score changes for this match
     changes = (
@@ -785,6 +860,19 @@ def trigger_weekly_import(
         fixtures_data=[{"external_id": it.external_id, "admin_flags": it.admin_flags} for it in items],
     )
     return {"detail": "İçe aktarma başlatıldı", "task_id": task.id}
+
+
+@router.get("/task/{task_id}/status")
+def get_task_status(task_id: str, _: models.User = Depends(require_admin)):
+    from celery.result import AsyncResult
+    from app.workers.celery_app import celery_app
+    result = AsyncResult(task_id, app=celery_app)
+    return {
+        "task_id": task_id,
+        "status": result.state,
+        "result": result.result if result.ready() else None,
+        "error": str(result.info) if result.failed() else None,
+    }
 
 
 @router.post("/recompute-week/{pool_id}")

@@ -714,6 +714,36 @@ export default function AdminPage() {
     finally { setLoginLoading(false); }
   }
 
+  function pollTaskStatus(taskId: string, onSuccess?: (result: unknown) => void, successMsg?: string) {
+    const interval = setInterval(async () => {
+      try {
+        const r = await apiFetch(`/admin/task/${taskId}/status`);
+        if (r.status === "SUCCESS") {
+          clearInterval(interval);
+          setOpsMsg(successMsg ?? "Tamamlandı.");
+          onSuccess?.(r.result);
+        } else if (r.status === "FAILURE") {
+          clearInterval(interval);
+          setOpsMsg(`Hata: ${r.error}`);
+        } else {
+          setOpsMsg(`İşlem devam ediyor… (${r.status})`);
+        }
+      } catch {
+        clearInterval(interval);
+      }
+    }, 2000);
+  }
+
+  async function triggerScoringForPool(poolId: number) {
+    try {
+      await loadPools();
+      setSelectedPool(poolId);
+      setOpsMsg("Puanlama hesaplanıyor…");
+      const r2 = await apiFetch(`/admin/recompute-week/${poolId}`, { method: "POST" });
+      pollTaskStatus(r2.task_id, undefined, "Puanlama tamamlandı ✓");
+    } catch (e: unknown) { setOpsMsg((e as Error).message); }
+  }
+
   async function importWeek() {
     const ids = fixtureIds.split(",").map(s => parseInt(s.trim())).filter(Boolean);
     try {
@@ -721,6 +751,11 @@ export default function AdminPage() {
         method: "POST", body: JSON.stringify({ week_code: weekCode, fixture_external_ids: ids }),
       });
       setOpsMsg(`${r.detail} — task: ${r.task_id}`);
+      pollTaskStatus(r.task_id, (result) => {
+        const poolId = (result as { pool_id?: number })?.pool_id;
+        if (poolId) triggerScoringForPool(poolId);
+        else setOpsMsg("İçe aktarma tamamlandı.");
+      });
     } catch (e: unknown) { setOpsMsg((e as Error).message); }
   }
 
@@ -748,14 +783,21 @@ export default function AdminPage() {
         body: JSON.stringify({ week_code: resolveWeekCode, fixture_external_ids: ids }),
       });
       setOpsMsg(`${r.detail} — task: ${r.task_id}`);
+      pollTaskStatus(r.task_id, (result) => {
+        const poolId = (result as { pool_id?: number })?.pool_id;
+        if (poolId) triggerScoringForPool(poolId);
+        else setOpsMsg("İçe aktarma tamamlandı.");
+      });
     } catch (e: unknown) { setOpsMsg((e as Error).message); }
   }
 
-  async function recomputePool() {
-    if (!selectedPool) return;
+  async function recomputePool(overridePoolId?: number) {
+    const pid = overridePoolId ?? selectedPool;
+    if (!pid) return;
     try {
-      const r = await apiFetch(`/admin/recompute-week/${selectedPool}`, { method: "POST" });
-      setOpsMsg(`${r.detail} — task: ${r.task_id}`);
+      const r = await apiFetch(`/admin/recompute-week/${pid}`, { method: "POST" });
+      setOpsMsg(`Hesaplanıyor… task: ${r.task_id}`);
+      pollTaskStatus(r.task_id, undefined, "Puanlama tamamlandı ✓");
     } catch (e: unknown) { setOpsMsg((e as Error).message); }
   }
 
