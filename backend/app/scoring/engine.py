@@ -68,8 +68,8 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
 
     # ── Score_1 (Home Win) ─────────────────────────────────────────────────
     score_1 = (
-        0.18 * f.strength_edge_norm
-        + 0.14 * f.form_edge_norm
+        0.08 * f.strength_edge_norm          # reduced: season stats matter less
+        + 0.18 * f.form_edge_norm            # increased: last-5 form matters more
         + 0.10 * f.home_advantage
         + 0.09 * f.lineup_edge_home
         + 0.08 * f.motivation_edge           # home_motivation - away_motivation, normalized
@@ -80,6 +80,7 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
         + 0.05 * f.sharp_money_home_signal   # 1 - sharp_money if moving toward home
         + 0.04 * f.congestion_advantage      # 1.0 if away congested, 0.5 neutral, 0.0 if home
         + 0.04 * f.xg_luck_edge              # unlucky home or lucky away → boost
+        + 0.06 * f.last_5_home_attack_edge   # new: home attack vs away defense (last 5)
     )
 
     # ── Score_X (Draw) ─────────────────────────────────────────────────────
@@ -97,8 +98,8 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
 
     # ── Score_2 (Away Win) ─────────────────────────────────────────────────
     score_2 = (
-        0.18 * f.away_strength_edge_norm
-        + 0.14 * f.away_form_edge_norm
+        0.08 * f.away_strength_edge_norm     # reduced: season stats matter less
+        + 0.18 * f.away_form_edge_norm       # increased: last-5 form matters more
         + 0.10 * f.weak_home_signal
         + 0.09 * f.lineup_edge_away
         + 0.08 * f.away_motivation_edge
@@ -109,6 +110,7 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
         + 0.05 * f.sharp_money_away_signal
         + 0.04 * f.intl_break_home_penalty   # home team post-break = away advantage
         + 0.04 * f.xg_luck_edge_away
+        + 0.06 * f.last_5_away_attack_edge   # new: away attack vs home defense (last 5)
     )
 
     p1, px, p2 = _softmax([score_1, score_x, score_2], T=SOFTMAX_T)
@@ -124,13 +126,13 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
     h2h_alignment = _h2h_alignment(primary_pick, f)
     motivation_clarity = abs(f.motivation_home_raw - f.motivation_away_raw)
 
+    lineup_cert_floored = max(0.30, f.lineup_certainty)
     confidence_raw = (
-        0.40 * (p_max - p_second)
-        + 0.15 * f.feature_stability
-        + 0.15 * f.market_agreement
-        + 0.10 * f.lineup_certainty
-        + 0.10 * h2h_alignment
-        + 0.10 * motivation_clarity
+        0.50 * (p_max - p_second)      # was 0.40 — probability gap is the strongest signal
+        + 0.15 * f.market_agreement    # unchanged
+        + 0.15 * lineup_cert_floored   # merged slot, floor at 0.30 so pre-match ≠ 0
+        + 0.10 * h2h_alignment         # unchanged
+        + 0.10 * motivation_clarity    # unchanged
     )
 
     # Apply suppressors
@@ -452,8 +454,14 @@ class _FeatureBundle:
         return self.lineup_edge_home * 0.5 + self.lineup_certainty * 0.5
 
     @property
-    def feature_stability(self):
-        return self.lineup_certainty
+    def last_5_home_attack_edge(self) -> float:
+        rf = getattr(self._s, "raw_features", None) or {}
+        return float(rf.get("last_5", {}).get("last_5_home_attack_edge", 0.5))
+
+    @property
+    def last_5_away_attack_edge(self) -> float:
+        rf = getattr(self._s, "raw_features", None) or {}
+        return float(rf.get("last_5", {}).get("last_5_away_attack_edge", 0.5))
 
     @property
     def draw_risk(self):
