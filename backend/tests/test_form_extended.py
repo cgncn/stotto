@@ -87,3 +87,77 @@ def test_missing_shots_on_target_skipped():
     }
     result = compute_xg_features([entry], TEAM_ID)
     assert result["xg_proxy"] is None
+
+
+# ── Last5Metrics tests ──────────────────────────────────────────────────────
+
+from types import SimpleNamespace
+from datetime import datetime
+from app.features.form import _last5_from_rows, Last5Metrics
+import pytest
+
+
+def _fixture(home_id, away_id, home_score, away_score, day):
+    return SimpleNamespace(
+        home_team_id=home_id,
+        away_team_id=away_id,
+        home_score=home_score,
+        away_score=away_score,
+        status="FT",
+        kickoff_at=datetime(2026, 1, day),
+    )
+
+
+def test_last5_all_wins_2_0():
+    """5 home 2-0 wins: scored=0.5, conceded=0.0, ppg=1.0, diff=0.75"""
+    rows = [_fixture(1, 2, 2, 0, i) for i in range(1, 6)]
+    m = _last5_from_rows(rows, team_id=1)
+    assert m.goals_scored_avg == pytest.approx(0.5)      # 2/4
+    assert m.goals_conceded_avg == pytest.approx(0.0)
+    assert m.points_per_game == pytest.approx(1.0)
+    assert m.goal_diff_avg == pytest.approx(0.75)         # (2+4)/8
+
+
+def test_last5_all_losses_0_3():
+    """5 away 0-3 losses: scored=0.0, conceded=0.75, ppg=0.0, diff=0.125"""
+    rows = [_fixture(2, 1, 3, 0, i) for i in range(1, 6)]
+    m = _last5_from_rows(rows, team_id=1)
+    assert m.goals_scored_avg == pytest.approx(0.0)
+    assert m.goals_conceded_avg == pytest.approx(0.75)    # 3/4
+    assert m.points_per_game == pytest.approx(0.0)
+    assert m.goal_diff_avg == pytest.approx(0.125)        # (-3+4)/8
+
+
+def test_last5_neutral_on_empty():
+    """No fixtures → all 0.5 neutral"""
+    m = _last5_from_rows([], team_id=1)
+    assert m == Last5Metrics(0.5, 0.5, 0.5, 0.5)
+
+
+def test_last5_neutral_on_one_row():
+    """Only 1 fixture (< 2 minimum) → all 0.5 neutral"""
+    rows = [_fixture(1, 2, 1, 1, 1)]
+    m = _last5_from_rows(rows, team_id=1)
+    assert m == Last5Metrics(0.5, 0.5, 0.5, 0.5)
+
+
+def test_last5_uses_only_ft_fixtures():
+    """NS fixtures are ignored even if they pass the team_id filter"""
+    ft_row = _fixture(1, 2, 2, 0, 3)
+    ns_row = SimpleNamespace(
+        home_team_id=1, away_team_id=2,
+        home_score=None, away_score=None,
+        status="NS", kickoff_at=datetime(2026, 1, 5),
+    )
+    rows = [ft_row, ft_row, ns_row, ns_row, ns_row]
+    m = _last5_from_rows(rows, team_id=1)
+    # Only 2 FT rows → still enough, but NS should not contribute
+    assert m.goals_scored_avg == pytest.approx(0.5)
+
+
+def test_last5_caps_goals_at_4():
+    """6-goal games clamp to 4 before normalising"""
+    rows = [_fixture(1, 2, 6, 6, i) for i in range(1, 6)]
+    m = _last5_from_rows(rows, team_id=1)
+    assert m.goals_scored_avg == pytest.approx(1.0)   # min(6,4)/4
+    assert m.goals_conceded_avg == pytest.approx(1.0)
