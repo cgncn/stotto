@@ -24,6 +24,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/kupon" className="text-sm hover:opacity-80">
                 Kupon Optimizasyonu
               </Link>
+              <Link href="/gecmis" className="text-sm hover:opacity-80">
+                Geçmiş Haftalar
+              </Link>
               <div className="ml-auto">
                 <ClientNav />
               </div>

@@ -688,6 +688,16 @@ export default function AdminPage() {
   const [resolveLoading, setResolveLoading] = useState(false);
   const [rowOverrides, setRowOverrides] = useState<Record<number, number | null>>({});
 
+  interface CalibrationEntry {
+    id: number;
+    week_code: string;
+    correct_count: number;
+    scored_count: number;
+    brier_score: number | null;
+    avg_confidence: number | null;
+  }
+  const [calibrationData, setCalibrationData] = useState<CalibrationEntry[]>([]);
+
   const loadPools = useCallback(async () => {
     try {
       const data: Pool[] = await apiFetch("/admin/pools");
@@ -697,6 +707,14 @@ export default function AdminPage() {
   }, [apiFetch]);
 
   useEffect(() => { if (token) loadPools(); }, [token, loadPools]);
+
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${BASE}/weekly-pools/history`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then((data: CalibrationEntry[]) => setCalibrationData(data.slice(0, 5)))
+      .catch(() => {});
+  }, [token]);
 
   async function doLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -981,6 +999,38 @@ export default function AdminPage() {
                     Yeniden Hesapla
                   </button>
                 </div>
+
+                {calibrationData.length > 0 && (
+                  <div className="border border-zinc-700 rounded-lg p-3">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Model Kalibrasyon Notu</div>
+                    <div className="space-y-1.5 mb-3">
+                      {calibrationData.map(entry => {
+                        const acc = entry.scored_count > 0
+                          ? Math.round((entry.correct_count / entry.scored_count) * 100)
+                          : null;
+                        const brierColor = entry.brier_score === null ? "text-zinc-500"
+                          : entry.brier_score < 0.28 ? "text-green-400"
+                          : entry.brier_score <= 0.33 ? "text-amber-400"
+                          : "text-red-400";
+                        return (
+                          <div key={entry.id} className="flex items-center justify-between text-[10px] font-mono">
+                            <span className="text-zinc-400">{entry.week_code}</span>
+                            <span className="text-zinc-300">{acc !== null ? `${acc}%` : "—"}</span>
+                            <span className={brierColor}>
+                              Brier: {entry.brier_score !== null ? entry.brier_score.toFixed(3) : "—"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-zinc-500 leading-relaxed">
+                      Model, geçmiş haftaların tahmin doğruluğu ve Brier skoru (olasılık kalibrasyonu)
+                      ile izlenebilir. Brier &lt; 0.28 iyi, 0.28–0.33 orta, &gt; 0.33 rastgeleden kötü anlamına gelir.
+                      Tutarlı hatalar (örn. X sonuçları sürekli kaçırılıyor) için scoring/engine.py
+                      içindeki ağırlıkları güncelle.
+                    </p>
+                  </div>
+                )}
 
                 <div className="border-t border-zinc-700 pt-4">
                   <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Tüm Haftalar</div>

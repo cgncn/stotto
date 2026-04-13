@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import Session, joinedload
 
@@ -19,6 +22,35 @@ from app.schemas.pool import (
 )
 
 router = APIRouter()
+
+
+# ── History / accuracy schemas ─────────────────────────────────────────────────
+
+class PoolAccuracySummary(BaseModel):
+    id: int
+    week_code: str
+    created_at: str
+    match_count: int
+    scored_count: int
+    correct_count: int
+    brier_score: Optional[float]
+    avg_confidence: Optional[float]
+
+
+class MatchResultRow(BaseModel):
+    sequence_no: int
+    home_team: str
+    away_team: str
+    kickoff_at: Optional[str]
+    result: Optional[str]
+    home_score: Optional[int]
+    away_score: Optional[int]
+    primary_pick: Optional[str]
+    p1: Optional[float]
+    px: Optional[float]
+    p2: Optional[float]
+    confidence_score: Optional[float]
+    correct: Optional[bool]
 
 
 # ── Subscription tier scrubbing ────────────────────────────────────────────────
@@ -112,6 +144,100 @@ def _pm_to_summary(db: Session, pm: models.WeeklyPoolMatch, feat: models.MatchFe
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+@router.get("/history", response_model=list[PoolAccuracySummary])
+def get_pool_history(db: Session = Depends(get_db)):
+    """Return settled pools with prediction accuracy statistics."""
+    settled_pools = (
+        db.query(models.WeeklyPool)
+        .filter(models.WeeklyPool.status == models.PoolStatus.settled)
+        .order_by(models.WeeklyPool.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for pool in settled_pools:
+        pm_ids = [pm.id for pm in pool.matches]
+        match_count = len(pm_ids)
+
+        if not pm_ids:
+            result.append(PoolAccuracySummary(
+                id=pool.id,
+                week_code=pool.week_code,
+                created_at=pool.created_at.isoformat() if pool.created_at else "",
+                match_count=0,
+                scored_count=0,
+                correct_count=0,
+                brier_score=None,
+                avg_confidence=None,
+            ))
+            continue
+
+        # Build subquery: latest score id per match
+        latest_score_subq = (
+            db.query(
+                models.MatchModelScore.weekly_pool_match_id,
+                func.max(models.MatchModelScore.created_at).label("max_created"),
+            )
+            .filter(models.MatchModelScore.weekly_pool_match_id.in_(pm_ids))
+            .group_by(models.MatchModelScore.weekly_pool_match_id)
+            .subquery()
+        )
+        latest_scores = (
+            db.query(models.MatchModelScore)
+            .join(
+                latest_score_subq,
+                and_(
+                    models.MatchModelScore.weekly_pool_match_id == latest_score_subq.c.weekly_pool_match_id,
+                    models.MatchModelScore.created_at == latest_score_subq.c.max_created,
+                ),
+            )
+            .all()
+        )
+        score_by_pm = {s.weekly_pool_match_id: s for s in latest_scores}
+
+        # Build result_by_pm from pool matches
+        result_by_pm = {pm.id: pm.result for pm in pool.matches}
+
+        scored_count = 0
+        correct_count = 0
+        brier_total = 0.0
+        confidence_total = 0.0
+        confidence_count = 0
+
+        for pm in pool.matches:
+            score = score_by_pm.get(pm.id)
+            if score is None:
+                continue
+            scored_count += 1
+            actual = result_by_pm.get(pm.id)
+            if actual in ("1", "X", "2"):
+                i1 = 1.0 if actual == "1" else 0.0
+                ix = 1.0 if actual == "X" else 0.0
+                i2 = 1.0 if actual == "2" else 0.0
+                brier_total += (score.p1 - i1) ** 2 + (score.px - ix) ** 2 + (score.p2 - i2) ** 2
+                if score.primary_pick == actual:
+                    correct_count += 1
+            if score.confidence_score is not None:
+                confidence_total += score.confidence_score
+                confidence_count += 1
+
+        brier_score = (brier_total / scored_count) if scored_count > 0 else None
+        avg_confidence = (confidence_total / confidence_count) if confidence_count > 0 else None
+
+        result.append(PoolAccuracySummary(
+            id=pool.id,
+            week_code=pool.week_code,
+            created_at=pool.created_at.isoformat() if pool.created_at else "",
+            match_count=match_count,
+            scored_count=scored_count,
+            correct_count=correct_count,
+            brier_score=brier_score,
+            avg_confidence=avg_confidence,
+        ))
+
+    return result
+
+
 @router.get("/current", response_model=PoolSummaryOut)
 def get_current_pool(db: Session = Depends(get_db)):
     pool = (
@@ -132,6 +258,82 @@ def get_current_pool(db: Session = Depends(get_db)):
         match_count=len(pool.matches),
         locked_count=locked_count,
     )
+
+
+@router.get("/{pool_id}/results", response_model=list[MatchResultRow])
+def get_pool_results(pool_id: int, db: Session = Depends(get_db)):
+    """Return match-level prediction vs actual result for a settled pool."""
+    pool = (
+        db.query(models.WeeklyPool)
+        .options(
+            joinedload(models.WeeklyPool.matches)
+            .joinedload(models.WeeklyPoolMatch.fixture)
+            .joinedload(models.Fixture.home_team),
+            joinedload(models.WeeklyPool.matches)
+            .joinedload(models.WeeklyPoolMatch.fixture)
+            .joinedload(models.Fixture.away_team),
+        )
+        .filter_by(id=pool_id)
+        .first()
+    )
+    if not pool:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hafta bulunamadı")
+
+    pm_ids = [pm.id for pm in pool.matches]
+
+    # Latest score per match
+    latest_score_subq = (
+        db.query(
+            models.MatchModelScore.weekly_pool_match_id,
+            func.max(models.MatchModelScore.created_at).label("max_created"),
+        )
+        .filter(models.MatchModelScore.weekly_pool_match_id.in_(pm_ids))
+        .group_by(models.MatchModelScore.weekly_pool_match_id)
+        .subquery()
+    )
+    latest_scores = (
+        db.query(models.MatchModelScore)
+        .join(
+            latest_score_subq,
+            and_(
+                models.MatchModelScore.weekly_pool_match_id == latest_score_subq.c.weekly_pool_match_id,
+                models.MatchModelScore.created_at == latest_score_subq.c.max_created,
+            ),
+        )
+        .all()
+    )
+    score_by_pm = {s.weekly_pool_match_id: s for s in latest_scores}
+
+    rows = []
+    for pm in sorted(pool.matches, key=lambda m: m.sequence_no):
+        score = score_by_pm.get(pm.id)
+        fixture = pm.fixture
+        home_team = fixture.home_team.name if fixture and fixture.home_team else ""
+        away_team = fixture.away_team.name if fixture and fixture.away_team else ""
+        kickoff = pm.kickoff_at.isoformat() if pm.kickoff_at else None
+        actual = pm.result
+
+        correct = None
+        if score is not None and actual in ("1", "X", "2"):
+            correct = score.primary_pick == actual
+
+        rows.append(MatchResultRow(
+            sequence_no=pm.sequence_no,
+            home_team=home_team,
+            away_team=away_team,
+            kickoff_at=kickoff,
+            result=actual,
+            home_score=fixture.home_score if fixture else None,
+            away_score=fixture.away_score if fixture else None,
+            primary_pick=score.primary_pick if score else None,
+            p1=score.p1 if score else None,
+            px=score.px if score else None,
+            p2=score.p2 if score else None,
+            confidence_score=score.confidence_score if score else None,
+            correct=correct,
+        ))
+
+    return rows
 
 
 @router.get("/{pool_id}", response_model=list[PoolMatchSummary])
