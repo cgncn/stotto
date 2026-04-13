@@ -181,7 +181,6 @@ def _compute_match_features(db: Session, pm: models.WeeklyPoolMatch) -> None:  #
         away_draw_rate=away_draw_rate,
     )
 
-    # ── Lineup features ───────────────────────────────────────────────────
     # ── Typical XI (last 5 confirmed lineups) ─────────────────────────────
     home_typical_xi = build_typical_xi(home_team.external_provider_id, db)
     away_typical_xi = build_typical_xi(away_team.external_provider_id, db)
@@ -204,14 +203,14 @@ def _compute_match_features(db: Session, pm: models.WeeklyPoolMatch) -> None:  #
     )
 
     # ── Last-5 fixture performance ─────────────────────────────────────────
-    home_l5 = compute_last5_from_fixtures(fixture.home_team_id, db)
-    away_l5 = compute_last5_from_fixtures(fixture.away_team_id, db)
-    # home attacks vs away defends (both from last 5)
-    last_5_attack_edge = (
+    home_l5 = compute_last5_from_fixtures(home_team.id, db)
+    away_l5 = compute_last5_from_fixtures(away_team.id, db)
+    # home team attack vs away team defense (last 5 games)
+    last_5_home_attack_edge = (
         home_l5.goals_scored_avg - (1.0 - away_l5.goals_conceded_avg)
     ) / 2.0 + 0.5
-    # away attacks vs home defends
-    last_5_defense_edge = (
+    # away team attack vs home team defense (last 5 games)
+    last_5_away_attack_edge = (
         away_l5.goals_scored_avg - (1.0 - home_l5.goals_conceded_avg)
     ) / 2.0 + 0.5
 
@@ -303,8 +302,8 @@ def _compute_match_features(db: Session, pm: models.WeeklyPoolMatch) -> None:  #
             "market": market,
             "draw": draw_feats,
             "last_5": {
-                "last_5_attack_edge": last_5_attack_edge,
-                "last_5_defense_edge": last_5_defense_edge,
+                "last_5_home_attack_edge": last_5_home_attack_edge,
+                "last_5_away_attack_edge": last_5_away_attack_edge,
                 "home_goals_scored_avg": home_l5.goals_scored_avg,
                 "home_goals_conceded_avg": home_l5.goals_conceded_avg,
                 "away_goals_scored_avg": away_l5.goals_scored_avg,
