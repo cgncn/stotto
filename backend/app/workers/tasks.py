@@ -134,12 +134,20 @@ def task_weekly_import(self, week_code: str, fixture_external_ids: list[int] | N
     logger.info("Weekly import started: week=%s, fixtures=%s", week_code, [i[0] for i in items])
 
     with SessionLocal() as db:
-        # Idempotent: re-use existing pool if already created
+        # Idempotent: re-use existing pool if already created.
+        # Guard against race conditions (two tasks started simultaneously) with
+        # a try/except on the unique constraint so the "loser" just re-fetches.
+        from sqlalchemy.exc import IntegrityError as _IntegrityError
+
         pool = db.query(models.WeeklyPool).filter_by(week_code=week_code).first()
         if not pool:
-            pool = models.WeeklyPool(week_code=week_code, status=models.PoolStatus.open)
-            db.add(pool)
-            db.flush()
+            try:
+                pool = models.WeeklyPool(week_code=week_code, status=models.PoolStatus.open)
+                db.add(pool)
+                db.flush()
+            except _IntegrityError:
+                db.rollback()
+                pool = db.query(models.WeeklyPool).filter_by(week_code=week_code).first()
 
         adapter = APIFootballAdapter(db)
 
