@@ -632,7 +632,7 @@ def get_coupon_scenarios(
         picks = [CouponPickOut(**p) for p in (s.picks_json or [])]
         result.append(CouponScenarioOut(
             id=s.id,
-            scenario_type=s.scenario_type.value,
+            scenario_type=s.scenario_type if isinstance(s.scenario_type, str) else s.scenario_type.value,
             total_columns=s.total_columns,
             expected_coverage_score=s.expected_coverage_score,
             picks=picks,
