@@ -21,6 +21,14 @@ export function ClientNav() {
 
   return (
     <div className="flex gap-4 text-sm items-center">
+      {user.role === "ADMIN" && (
+        <Link
+          href="/admin"
+          className="bg-yellow-500 hover:bg-yellow-400 text-black font-semibold px-3 py-1 rounded text-xs"
+        >
+          ⚙ Admin
+        </Link>
+      )}
       <Link href="/uye-ol" className="text-gray-300 hover:text-white">
         Üye Ol
       </Link>
