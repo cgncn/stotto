@@ -374,8 +374,8 @@ class MatchModelScore(Base):
     secondary_pick = Column(String(1))
     confidence_score = Column(Float)
     coverage_need_score = Column(Float)
-    coverage_pick = Column(String(2))  # '1X', 'X2', '12', '1', 'X', '2'
-    coverage_type = Column(Enum(CoverageType))
+    coverage_pick = Column(String(3))  # '1X', 'X2', '12', '1X2', '1', 'X', '2'
+    coverage_type = Column(String(10))  # single/double/triple
     coupon_criticality_score = Column(Float)
 
     reason_codes = Column(JSON)  # list of strings
@@ -390,8 +390,8 @@ class CouponScenario(Base):
     id = Column(BigInteger, primary_key=True)
     weekly_pool_id = Column(Integer, ForeignKey("weekly_pools.id"), nullable=False, index=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    scenario_type = Column(Enum(ScenarioType), nullable=False)
-    risk_profile = Column(Enum(RiskProfile), default=RiskProfile.medium)
+    scenario_type = Column(String(20), nullable=False)
+    risk_profile = Column(String(10), default=RiskProfile.medium.value)
     max_columns = Column(Integer)
     max_doubles = Column(Integer)
     max_triples = Column(Integer)
@@ -449,6 +449,19 @@ class UserCouponPerformance(Base):
     brier_score = Column(Float)
     roi_estimate = Column(Float)
     settled_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ModelCalibration(Base):
+    __tablename__ = "model_calibration"
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    applied_by = Column(String(20), nullable=False, default="auto")
+    # {"score_1": {signal: multiplier}, "score_x": {...}, "score_2": {...}}
+    multipliers = Column(JSON, nullable=False)
+    brier_before = Column(Float)
+    brier_after = Column(Float)
+    n_matches = Column(Integer)
+    is_active = Column(Boolean, nullable=False, default=True)
 
 
 class SubscriptionLog(Base):

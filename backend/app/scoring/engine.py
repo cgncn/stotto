@@ -35,20 +35,41 @@ _LUCKY_FORM_SUPPRESSOR = 0.90
 _LONG_UNBEATEN_SUPPRESSOR = 0.93   # complacency risk for home side
 
 
+def _load_calibration_multipliers(db: Session) -> dict:
+    """Return the active calibration multipliers, or empty dict if none set."""
+    row = (
+        db.query(models.ModelCalibration)
+        .filter_by(is_active=True)
+        .order_by(models.ModelCalibration.created_at.desc())
+        .first()
+    )
+    return row.multipliers if row else {}
+
+
+def _apply_multipliers(base_weights: dict, multipliers: dict) -> dict:
+    """Multiply each base weight by its calibration factor, then renormalise to sum=1."""
+    if not multipliers:
+        return base_weights
+    adjusted = {k: v * multipliers.get(k, 1.0) for k, v in base_weights.items()}
+    total = sum(adjusted.values()) or 1.0
+    return {k: v / total for k, v in adjusted.items()}
+
+
 def run_scoring_engine(db: Session, pool: models.WeeklyPool) -> None:
     """Score every unlocked match in the pool and write MatchModelScore rows."""
     logger.info("Scoring engine v2 running for pool %d", pool.id)
+    cal = _load_calibration_multipliers(db)
 
     for pm in pool.matches:
         if pm.is_locked:
             continue
         try:
-            _score_match(db, pm)
+            _score_match(db, pm, cal)
         except Exception as exc:
             logger.error("Scoring failed for match %d: %s", pm.id, exc, exc_info=True)
 
 
-def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
+def _score_match(db: Session, pm: models.WeeklyPoolMatch, cal: dict | None = None) -> None:
     # Get latest feature snapshot
     feat_snap = (
         db.query(models.MatchFeatureSnapshot)
@@ -65,53 +86,39 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
         is_stub = False
 
     f = _FeatureBundle(feat_snap)
+    cal = cal or {}
+
+    # Base weights — calibration multipliers are applied on top of these
+    _w1 = _apply_multipliers({
+        "strength_edge_norm": 0.08, "form_edge_norm": 0.18, "home_advantage": 0.10,
+        "lineup_edge_home": 0.09, "motivation_edge": 0.08, "h2h_home_advantage": 0.08,
+        "market_support": 0.07, "away_form_penalty": 0.07, "schedule_edge": 0.06,
+        "sharp_money_home_signal": 0.05, "congestion_advantage": 0.04,
+        "xg_luck_edge": 0.04, "last_5_home_attack_edge": 0.06,
+    }, cal.get("score_1", {}))
+
+    _wx = _apply_multipliers({
+        "draw_tendency": 0.22, "balance_score": 0.14, "low_tempo_signal": 0.11,
+        "low_goal_signal": 0.10, "h2h_draw_rate": 0.09, "market_draw_signal": 0.09,
+        "equal_motivation": 0.08, "tactical_symmetry": 0.08, "volatility_mid_zone": 0.09,
+    }, cal.get("score_x", {}))
+
+    _w2 = _apply_multipliers({
+        "away_strength_edge_norm": 0.08, "away_form_edge_norm": 0.18, "weak_home_signal": 0.10,
+        "lineup_edge_away": 0.09, "away_motivation_edge": 0.08, "h2h_bogey_signal": 0.08,
+        "away_market_support": 0.07, "away_form_away": 0.07, "schedule_edge_away": 0.06,
+        "sharp_money_away_signal": 0.05, "intl_break_home_penalty": 0.04,
+        "xg_luck_edge_away": 0.04, "last_5_away_attack_edge": 0.06,
+    }, cal.get("score_2", {}))
 
     # ── Score_1 (Home Win) ─────────────────────────────────────────────────
-    score_1 = (
-        0.08 * f.strength_edge_norm          # reduced: season stats matter less
-        + 0.18 * f.form_edge_norm            # increased: last-5 form matters more
-        + 0.10 * f.home_advantage
-        + 0.09 * f.lineup_edge_home
-        + 0.08 * f.motivation_edge           # home_motivation - away_motivation, normalized
-        + 0.08 * f.h2h_home_advantage        # H2H home win rate
-        + 0.07 * f.market_support
-        + 0.07 * f.away_form_penalty         # 1 - away_form_away (strong away team = more threat)
-        + 0.06 * f.schedule_edge             # real rest days
-        + 0.05 * f.sharp_money_home_signal   # 1 - sharp_money if moving toward home
-        + 0.04 * f.congestion_advantage      # 1.0 if away congested, 0.5 neutral, 0.0 if home
-        + 0.04 * f.xg_luck_edge              # unlucky home or lucky away → boost
-        + 0.06 * f.last_5_home_attack_edge   # new: home attack vs away defense (last 5)
-    )
+    score_1 = sum(w * getattr(f, sig) for sig, w in _w1.items())
 
     # ── Score_X (Draw) ─────────────────────────────────────────────────────
-    score_x = (
-        0.22 * f.draw_tendency
-        + 0.14 * f.balance_score
-        + 0.11 * f.low_tempo_signal
-        + 0.10 * f.low_goal_signal
-        + 0.09 * f.h2h_draw_rate
-        + 0.09 * f.market_draw_signal
-        + 0.08 * f.equal_motivation          # 1 - |motivation_home - motivation_away|
-        + 0.08 * f.tactical_symmetry
-        + 0.09 * f.volatility_mid_zone
-    )
+    score_x = sum(w * getattr(f, sig) for sig, w in _wx.items())
 
     # ── Score_2 (Away Win) ─────────────────────────────────────────────────
-    score_2 = (
-        0.08 * f.away_strength_edge_norm     # reduced: season stats matter less
-        + 0.18 * f.away_form_edge_norm       # increased: last-5 form matters more
-        + 0.10 * f.weak_home_signal
-        + 0.09 * f.lineup_edge_away
-        + 0.08 * f.away_motivation_edge
-        + 0.08 * f.h2h_bogey_signal          # bogey flag or H2H away win rate
-        + 0.07 * f.away_market_support
-        + 0.07 * f.away_form_away            # away team's actual away record
-        + 0.06 * f.schedule_edge_away        # away team rest advantage
-        + 0.05 * f.sharp_money_away_signal
-        + 0.04 * f.intl_break_home_penalty   # home team post-break = away advantage
-        + 0.04 * f.xg_luck_edge_away
-        + 0.06 * f.last_5_away_attack_edge   # new: away attack vs home defense (last 5)
-    )
+    score_2 = sum(w * getattr(f, sig) for sig, w in _w2.items())
 
     p1, px, p2 = _softmax([score_1, score_x, score_2], T=SOFTMAX_T)
 
@@ -167,13 +174,13 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch) -> None:
 
     # ── Coverage type ──────────────────────────────────────────────────────
     if coverage_need_score <= SINGLE_MAX:
-        coverage_type = models.CoverageType.single
+        coverage_type = models.CoverageType.single.value
         coverage_pick = primary_pick
     elif coverage_need_score <= DOUBLE_MAX:
-        coverage_type = models.CoverageType.double
+        coverage_type = models.CoverageType.double.value
         coverage_pick = _choose_double(primary_pick, secondary_pick, px)
     else:
-        coverage_type = models.CoverageType.triple
+        coverage_type = models.CoverageType.triple.value
         coverage_pick = "1X2"
 
     # ── Reason codes ──────────────────────────────────────────────────────
@@ -269,7 +276,7 @@ def _h2h_alignment(primary_pick: str, f: "_FeatureBundle") -> float:
 
 
 def _build_reason_codes(
-    f: "_FeatureBundle", primary: str, coverage: models.CoverageType
+    f: "_FeatureBundle", primary: str, coverage: str
 ) -> list[str]:
     codes = []
     # Existing codes
@@ -291,7 +298,7 @@ def _build_reason_codes(
         codes.append("MARKET_ALIGNED")
     if f.volatility_score > 0.65:
         codes.append("HIGH_VOLATILITY")
-    if coverage == models.CoverageType.triple:
+    if coverage == models.CoverageType.triple.value:
         codes.append("TRIPLE_RISK")
     # New codes
     if f.is_derby:

@@ -985,3 +985,285 @@ def manual_override(
     db.add(change)
     db.commit()
     return {"detail": "Manuel geçersiz kılma uygulandı", "match_id": body.weekly_pool_match_id}
+
+
+# ── Model Calibration ──────────────────────────────────────────────────────────
+
+_BASE_WEIGHTS: dict[str, dict[str, float]] = {
+    "score_1": {
+        "strength_edge_norm": 0.08, "form_edge_norm": 0.18, "home_advantage": 0.10,
+        "lineup_edge_home": 0.09, "motivation_edge": 0.08, "h2h_home_advantage": 0.08,
+        "market_support": 0.07, "away_form_penalty": 0.07, "schedule_edge": 0.06,
+        "sharp_money_home_signal": 0.05, "congestion_advantage": 0.04,
+        "xg_luck_edge": 0.04, "last_5_home_attack_edge": 0.06,
+    },
+    "score_x": {
+        "draw_tendency": 0.22, "balance_score": 0.14, "low_tempo_signal": 0.11,
+        "low_goal_signal": 0.10, "h2h_draw_rate": 0.09, "market_draw_signal": 0.09,
+        "equal_motivation": 0.08, "tactical_symmetry": 0.08, "volatility_mid_zone": 0.09,
+    },
+    "score_2": {
+        "away_strength_edge_norm": 0.08, "away_form_edge_norm": 0.18, "weak_home_signal": 0.10,
+        "lineup_edge_away": 0.09, "away_motivation_edge": 0.08, "h2h_bogey_signal": 0.08,
+        "away_market_support": 0.07, "away_form_away": 0.07, "schedule_edge_away": 0.06,
+        "sharp_money_away_signal": 0.05, "intl_break_home_penalty": 0.04,
+        "xg_luck_edge_away": 0.04, "last_5_away_attack_edge": 0.06,
+    },
+}
+
+_MIN_MATCHES = 10   # require at least this many labelled matches before auto-applying
+_LEARNING_RATE = 0.05
+_SOFTMAX_T = 0.4
+
+
+def _brier_score(p1: float, px: float, p2: float, result: str) -> float:
+    y1 = 1.0 if result == "1" else 0.0
+    yx = 1.0 if result == "X" else 0.0
+    y2 = 1.0 if result == "2" else 0.0
+    return (p1 - y1) ** 2 + (px - yx) ** 2 + (p2 - y2) ** 2
+
+
+def _softmax3(s1: float, sx: float, s2: float, T: float = _SOFTMAX_T):
+    import math
+    vals = [s1 / T, sx / T, s2 / T]
+    m = max(vals)
+    exps = [math.exp(v - m) for v in vals]
+    total = sum(exps)
+    return exps[0] / total, exps[1] / total, exps[2] / total
+
+
+def _collect_calibration_data(db: Session):
+    """Return list of {p1,px,p2,result,features} for all scored+settled matches."""
+    from sqlalchemy import func as sqlfunc
+
+    # Subquery: latest score per match
+    latest_score_sq = (
+        db.query(
+            models.MatchModelScore.weekly_pool_match_id,
+            sqlfunc.max(models.MatchModelScore.created_at).label("max_ts"),
+        )
+        .group_by(models.MatchModelScore.weekly_pool_match_id)
+        .subquery()
+    )
+
+    rows = (
+        db.query(models.WeeklyPoolMatch, models.MatchModelScore, models.MatchFeatureSnapshot)
+        .join(
+            latest_score_sq,
+            models.MatchModelScore.weekly_pool_match_id == latest_score_sq.c.weekly_pool_match_id,
+        )
+        .filter(models.MatchModelScore.created_at == latest_score_sq.c.max_ts)
+        .outerjoin(
+            models.MatchFeatureSnapshot,
+            models.MatchFeatureSnapshot.weekly_pool_match_id == models.WeeklyPoolMatch.id,
+        )
+        .join(models.WeeklyPool, models.WeeklyPool.id == models.WeeklyPoolMatch.weekly_pool_id)
+        .filter(
+            models.WeeklyPool.status == models.PoolStatus.settled,
+            models.WeeklyPoolMatch.result.isnot(None),
+        )
+        .all()
+    )
+
+    data = []
+    for pm, score, feat in rows:
+        if not pm.result or score.p1 is None:
+            continue
+        feat_vals = {}
+        if feat and feat.raw_features:
+            # We'll compute gradients from stored feature values via _FeatureBundle proxy
+            from app.scoring.engine import _FeatureBundle
+            bundle = _FeatureBundle(feat)
+            for section in ("score_1", "score_x", "score_2"):
+                feat_vals[section] = {
+                    sig: getattr(bundle, sig, 0.5)
+                    for sig in _BASE_WEIGHTS[section]
+                }
+        data.append({
+            "p1": score.p1, "px": score.px, "p2": score.p2,
+            "result": pm.result,
+            "features": feat_vals,
+        })
+    return data
+
+
+def _compute_gradients(data: list[dict]) -> dict:
+    """
+    Compute mean Brier-score gradient w.r.t. each signal weight.
+
+    For score_1 signal s with weight w:
+      dBS/dw ≈ mean_over_matches[ 2*(p1-y1) * p1*(1-p1)/T * feature_s ]
+
+    Positive gradient → weight is too high (reduce it).
+    Negative gradient → weight is too low (increase it).
+    """
+    gradients: dict[str, dict[str, float]] = {k: {} for k in _BASE_WEIGHTS}
+
+    for section, score_label in [("score_1", "1"), ("score_x", "X"), ("score_2", "2")]:
+        for sig in _BASE_WEIGHTS[section]:
+            grads = []
+            for d in data:
+                if section not in d["features"]:
+                    continue
+                p = d["p1"] if score_label == "1" else (d["px"] if score_label == "X" else d["p2"])
+                y = 1.0 if d["result"] == score_label else 0.0
+                feat_val = d["features"][section].get(sig, 0.5)
+                dpds = p * (1.0 - p) / _SOFTMAX_T   # softmax Jacobian diagonal approx
+                grads.append(2.0 * (p - y) * dpds * feat_val)
+            gradients[section][sig] = sum(grads) / len(grads) if grads else 0.0
+
+    return gradients
+
+
+def _apply_gradient_step(
+    current_multipliers: dict,
+    gradients: dict,
+    lr: float = _LEARNING_RATE,
+) -> dict:
+    """Nudge multipliers one step in the negative-gradient direction, clamp to [0.2, 5.0]."""
+    new_mults: dict[str, dict[str, float]] = {}
+    for section in _BASE_WEIGHTS:
+        new_mults[section] = {}
+        for sig in _BASE_WEIGHTS[section]:
+            current = current_multipliers.get(section, {}).get(sig, 1.0)
+            grad = gradients.get(section, {}).get(sig, 0.0)
+            updated = current - lr * grad
+            new_mults[section][sig] = max(0.2, min(5.0, updated))
+    return new_mults
+
+
+@router.get("/calibration")
+def get_calibration(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Return current calibration state and per-signal gradient analysis."""
+    data = _collect_calibration_data(db)
+    n = len(data)
+
+    if n == 0:
+        return {"n_matches": 0, "brier_score": None, "gradients": {}, "active_multipliers": {}, "ready": False}
+
+    brier = sum(_brier_score(d["p1"], d["px"], d["p2"], d["result"]) for d in data) / n
+
+    # Accuracy
+    correct = sum(1 for d in data if (
+        (d["p1"] >= d["px"] and d["p1"] >= d["p2"] and d["result"] == "1") or
+        (d["px"] >= d["p1"] and d["px"] >= d["p2"] and d["result"] == "X") or
+        (d["p2"] >= d["p1"] and d["p2"] >= d["px"] and d["result"] == "2")
+    ))
+
+    gradients = _compute_gradients(data)
+
+    # Active multipliers
+    active = db.query(models.ModelCalibration).filter_by(is_active=True).order_by(
+        models.ModelCalibration.created_at.desc()
+    ).first()
+    active_mults = active.multipliers if active else {}
+
+    # Calibration by confidence tier
+    tiers = {"low": [], "mid": [], "high": []}
+    scored = (
+        db.query(models.WeeklyPoolMatch, models.MatchModelScore)
+        .join(models.MatchModelScore, models.MatchModelScore.weekly_pool_match_id == models.WeeklyPoolMatch.id)
+        .join(models.WeeklyPool, models.WeeklyPool.id == models.WeeklyPoolMatch.weekly_pool_id)
+        .filter(
+            models.WeeklyPool.status == models.PoolStatus.settled,
+            models.WeeklyPoolMatch.result.isnot(None),
+            models.MatchModelScore.confidence_score.isnot(None),
+        )
+        .all()
+    )
+    for pm, sc in scored:
+        tier = "high" if sc.confidence_score >= 60 else ("mid" if sc.confidence_score >= 35 else "low")
+        is_correct = sc.primary_pick == pm.result
+        tiers[tier].append(is_correct)
+
+    confidence_calibration = {
+        t: {
+            "n": len(v),
+            "accuracy_pct": round(100 * sum(v) / len(v)) if v else None,
+        }
+        for t, v in tiers.items()
+    }
+
+    return {
+        "n_matches": n,
+        "brier_score": round(brier, 4),
+        "accuracy_pct": round(100 * correct / n) if n else None,
+        "confidence_calibration": confidence_calibration,
+        "gradients": {
+            section: {
+                sig: round(g, 5)
+                for sig, g in sigs.items()
+            }
+            for section, sigs in gradients.items()
+        },
+        "active_multipliers": active_mults,
+        "ready": n >= _MIN_MATCHES,
+        "min_matches_required": _MIN_MATCHES,
+    }
+
+
+@router.post("/calibrate")
+def apply_calibration(
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(require_admin),
+):
+    """Apply one gradient-descent step to the active calibration multipliers.
+
+    Requires at least MIN_MATCHES settled+scored matches.
+    Deactivates the previous calibration row and inserts a new one.
+    """
+    data = _collect_calibration_data(db)
+    n = len(data)
+
+    if n < _MIN_MATCHES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Yetersiz veri: {n}/{_MIN_MATCHES} maç gerekli",
+        )
+
+    brier_before = sum(_brier_score(d["p1"], d["px"], d["p2"], d["result"]) for d in data) / n
+
+    # Load current multipliers (or start from identity)
+    active = db.query(models.ModelCalibration).filter_by(is_active=True).order_by(
+        models.ModelCalibration.created_at.desc()
+    ).first()
+    current_mults = active.multipliers if active else {}
+
+    gradients = _compute_gradients(data)
+    new_mults = _apply_gradient_step(current_mults, gradients)
+
+    # Deactivate previous
+    if active:
+        active.is_active = False
+
+    # Insert new
+    cal_row = models.ModelCalibration(
+        applied_by=f"admin:{admin.email}",
+        multipliers=new_mults,
+        brier_before=round(brier_before, 4),
+        n_matches=n,
+        is_active=True,
+    )
+    db.add(cal_row)
+    db.commit()
+
+    return {
+        "detail": "Kalibrasyon uygulandı",
+        "n_matches": n,
+        "brier_before": round(brier_before, 4),
+        "top_adjustments": {
+            section: sorted(
+                [
+                    {"signal": sig, "multiplier": round(new_mults[section][sig], 3),
+                     "gradient": round(gradients[section].get(sig, 0), 5)}
+                    for sig in new_mults[section]
+                ],
+                key=lambda x: abs(x["gradient"]),
+                reverse=True,
+            )[:3]
+            for section in new_mults
+        },
+    }

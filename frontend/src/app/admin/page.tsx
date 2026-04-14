@@ -698,6 +698,40 @@ export default function AdminPage() {
   }
   const [calibrationData, setCalibrationData] = useState<CalibrationEntry[]>([]);
 
+  interface GradientState {
+    n_matches: number;
+    brier_score: number | null;
+    accuracy_pct: number | null;
+    ready: boolean;
+    min_matches_required: number;
+    confidence_calibration: Record<string, { n: number; accuracy_pct: number | null }>;
+    gradients: Record<string, Record<string, number>>;
+    active_multipliers: Record<string, Record<string, number>>;
+  }
+  const [gradState, setGradState] = useState<GradientState | null>(null);
+  const [calLoading, setCalLoading] = useState(false);
+
+  const loadGradientState = useCallback(async () => {
+    if (!token) return;
+    try {
+      const d = await apiFetch("/admin/calibration");
+      setGradState(d);
+    } catch {}
+  }, [token, apiFetch]);
+
+  const applyCalibration = useCallback(async () => {
+    setCalLoading(true);
+    try {
+      const r = await apiFetch("/admin/calibrate", { method: "POST" });
+      setOpsMsg(`Kalibrasyon uygulandı — Brier öncesi: ${r.brier_before}`);
+      loadGradientState();
+    } catch (e: unknown) {
+      setOpsMsg((e as Error).message);
+    } finally {
+      setCalLoading(false);
+    }
+  }, [apiFetch, loadGradientState]);
+
   const loadPools = useCallback(async () => {
     try {
       const data: Pool[] = await apiFetch("/admin/pools");
@@ -714,7 +748,8 @@ export default function AdminPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data: CalibrationEntry[]) => setCalibrationData(data.slice(0, 5)))
       .catch(() => {});
-  }, [token]);
+    loadGradientState();
+  }, [token, loadGradientState]);
 
   async function doLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -1000,37 +1035,103 @@ export default function AdminPage() {
                   </button>
                 </div>
 
-                {calibrationData.length > 0 && (
-                  <div className="border border-zinc-700 rounded-lg p-3">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Model Kalibrasyon Notu</div>
-                    <div className="space-y-1.5 mb-3">
+                {/* ── Model Calibration Panel ─────────────────────────────── */}
+                <div className="border border-zinc-700 rounded-lg p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Otomatik Kalibrasyon</div>
+                    <button onClick={loadGradientState} className="text-[10px] text-zinc-500 hover:text-zinc-300">↻ Yenile</button>
+                  </div>
+
+                  {/* History summary */}
+                  {calibrationData.length > 0 && (
+                    <div className="space-y-1">
                       {calibrationData.map(entry => {
-                        const acc = entry.scored_count > 0
-                          ? Math.round((entry.correct_count / entry.scored_count) * 100)
-                          : null;
-                        const brierColor = entry.brier_score === null ? "text-zinc-500"
-                          : entry.brier_score < 0.28 ? "text-green-400"
-                          : entry.brier_score <= 0.33 ? "text-amber-400"
-                          : "text-red-400";
+                        const acc = entry.scored_count > 0 ? Math.round((entry.correct_count / entry.scored_count) * 100) : null;
+                        const bc = entry.brier_score === null ? "text-zinc-500" : entry.brier_score < 0.28 ? "text-green-400" : entry.brier_score <= 0.33 ? "text-amber-400" : "text-red-400";
                         return (
                           <div key={entry.id} className="flex items-center justify-between text-[10px] font-mono">
                             <span className="text-zinc-400">{entry.week_code}</span>
-                            <span className="text-zinc-300">{acc !== null ? `${acc}%` : "—"}</span>
-                            <span className={brierColor}>
-                              Brier: {entry.brier_score !== null ? entry.brier_score.toFixed(3) : "—"}
-                            </span>
+                            <span className="text-zinc-300">{acc !== null ? `${acc}% doğru` : "—"}</span>
+                            <span className={bc}>Brier {entry.brier_score?.toFixed(3) ?? "—"}</span>
                           </div>
                         );
                       })}
                     </div>
-                    <p className="text-[10px] text-zinc-500 leading-relaxed">
-                      Model, geçmiş haftaların tahmin doğruluğu ve Brier skoru (olasılık kalibrasyonu)
-                      ile izlenebilir. Brier &lt; 0.28 iyi, 0.28–0.33 orta, &gt; 0.33 rastgeleden kötü anlamına gelir.
-                      Tutarlı hatalar (örn. X sonuçları sürekli kaçırılıyor) için scoring/engine.py
-                      içindeki ağırlıkları güncelle.
-                    </p>
-                  </div>
-                )}
+                  )}
+
+                  {/* Gradient analysis */}
+                  {gradState && (
+                    <div className="space-y-2">
+                      <div className="flex gap-4 text-[10px] font-mono">
+                        <span className="text-zinc-500">Maç: <span className="text-zinc-300">{gradState.n_matches}</span></span>
+                        <span className="text-zinc-500">Brier: <span className={gradState.brier_score === null ? "text-zinc-500" : gradState.brier_score < 0.28 ? "text-green-400" : gradState.brier_score <= 0.33 ? "text-amber-400" : "text-red-400"}>{gradState.brier_score?.toFixed(4) ?? "—"}</span></span>
+                        <span className="text-zinc-500">Doğruluk: <span className="text-zinc-300">{gradState.accuracy_pct !== null ? `${gradState.accuracy_pct}%` : "—"}</span></span>
+                      </div>
+
+                      {/* Confidence calibration by tier */}
+                      {gradState.confidence_calibration && (
+                        <div className="grid grid-cols-3 gap-1 text-[10px]">
+                          {(["low","mid","high"] as const).map(tier => {
+                            const t = gradState.confidence_calibration[tier];
+                            return (
+                              <div key={tier} className="bg-zinc-800 rounded px-2 py-1 text-center">
+                                <div className="text-zinc-500 capitalize">{tier === "low" ? "Düşük" : tier === "mid" ? "Orta" : "Yüksek"}</div>
+                                <div className="text-zinc-300 font-mono">{t.accuracy_pct !== null ? `${t.accuracy_pct}%` : "—"}</div>
+                                <div className="text-zinc-600">{t.n} maç</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Top signals needing adjustment */}
+                      {Object.keys(gradState.gradients).length > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-zinc-500 uppercase tracking-wide">En Büyük Gradient</div>
+                          {(["score_1","score_x","score_2"] as const).map(section => {
+                            const sigs = Object.entries(gradState.gradients[section] || {})
+                              .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+                              .slice(0, 2);
+                            if (!sigs.length) return null;
+                            const label = section === "score_1" ? "Ev" : section === "score_x" ? "Berabere" : "Dep";
+                            return (
+                              <div key={section} className="text-[10px] font-mono">
+                                <span className="text-zinc-500">{label}: </span>
+                                {sigs.map(([sig, g]) => (
+                                  <span key={sig} className={`mr-2 ${g > 0 ? "text-red-400" : "text-green-400"}`}>
+                                    {sig.replace(/_/g, " ")} {g > 0 ? "↓" : "↑"}{Math.abs(g).toFixed(3)}
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          })}
+                          <p className="text-[10px] text-zinc-600">↓ azalt / ↑ artır (bir sonraki adımda uygulanır)</p>
+                        </div>
+                      )}
+
+                      {/* Active multipliers count */}
+                      {Object.keys(gradState.active_multipliers).length > 0 && (
+                        <div className="text-[10px] text-zinc-500">
+                          Aktif kalibrasyon: {Object.values(gradState.active_multipliers).reduce((s, v) => s + Object.keys(v).length, 0)} sinyal çarpanı uygulanıyor
+                        </div>
+                      )}
+
+                      {/* Apply button */}
+                      <button
+                        onClick={applyCalibration}
+                        disabled={calLoading || !gradState.ready}
+                        className="w-full py-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white text-xs rounded font-medium transition-colors"
+                      >
+                        {calLoading ? "Uygulanıyor…" : gradState.ready ? "Gradient Adımı Uygula" : `Yetersiz veri (${gradState.n_matches}/${gradState.min_matches_required} maç)`}
+                      </button>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-zinc-600 leading-relaxed">
+                    Brier &lt;0.28 iyi · 0.28–0.33 orta · &gt;0.33 rastgeleden kötü.
+                    Her adım ağırlıkları %5 kaydırır. 10+ maç gerekli.
+                  </p>
+                </div>
 
                 <div className="border-t border-zinc-700 pt-4">
                   <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Tüm Haftalar</div>
