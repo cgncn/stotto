@@ -360,7 +360,7 @@ def _collect_inputs(db: Session, pool: models.WeeklyPool) -> list[MatchInput]:
             secondary_pick=score.secondary_pick or score.primary_pick,
             confidence_score=score.confidence_score or 50.0,
             coverage_need_score=score.coverage_need_score or 50.0,
-            coverage_type=score.coverage_type.value if score.coverage_type else "single",
+            coverage_type=score.coverage_type if score.coverage_type else "single",
             coverage_pick=score.coverage_pick or score.primary_pick,
             coupon_criticality_score=score.coupon_criticality_score or 50.0,
         ))
