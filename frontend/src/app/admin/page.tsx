@@ -652,11 +652,14 @@ export default function AdminPage() {
   const router = useRouter();
   const apiFetch = useAdminFetch();
 
-  // ── Admin guard ────────────────────────────────────────────────────────────
+  // ── Admin guard ─────────────────────────────────────────────────────────────
+  // Only redirect if we have confirmed the user exists AND is NOT admin.
+  // Never redirect while loading or when user data is absent (API might be slow).
   useEffect(() => {
     if (loading) return;
-    if (!token) return; // let the login form handle unauthenticated
-    if (user?.role !== "ADMIN") router.replace("/");
+    if (!token) return;           // no token → show login form below
+    if (!user) return;            // token exists but profile not yet loaded → wait
+    if (user.role !== "ADMIN") router.replace("/");
   }, [loading, token, user, router]);
 
   const [email, setEmail] = useState("");
@@ -864,19 +867,6 @@ export default function AdminPage() {
   }
 
   // ── login ──────────────────────────────────────────────────────────────────
-  // Logged in but not admin
-  if (token && !loading && user?.role !== "ADMIN") {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
-        <div className="text-center">
-          <div className="text-red-400 text-5xl mb-4">⛔</div>
-          <div className="text-white font-bold text-xl mb-2">Erişim Reddedildi</div>
-          <div className="text-zinc-400 text-sm">Bu sayfaya erişim yetkiniz yok.</div>
-        </div>
-      </div>
-    );
-  }
-
   if (!token) {
     return (
       <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
