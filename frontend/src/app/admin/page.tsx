@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -647,8 +648,16 @@ function PoolMatchList({ poolId, onSelect }: { poolId: number; onSelect: (id: nu
 // ── main page ──────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const { token, login } = useAuth();
+  const { token, user, loading, login } = useAuth();
+  const router = useRouter();
   const apiFetch = useAdminFetch();
+
+  // ── Admin guard ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (loading) return;
+    if (!token) return; // let the login form handle unauthenticated
+    if (user?.role !== "ADMIN") router.replace("/");
+  }, [loading, token, user, router]);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -855,6 +864,19 @@ export default function AdminPage() {
   }
 
   // ── login ──────────────────────────────────────────────────────────────────
+  // Logged in but not admin
+  if (token && !loading && user?.role !== "ADMIN") {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="text-red-400 text-5xl mb-4">⛔</div>
+          <div className="text-white font-bold text-xl mb-2">Erişim Reddedildi</div>
+          <div className="text-zinc-400 text-sm">Bu sayfaya erişim yetkiniz yok.</div>
+        </div>
+      </div>
+    );
+  }
+
   if (!token) {
     return (
       <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
