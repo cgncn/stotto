@@ -96,8 +96,8 @@ def run_optimizer(db: Session, pool: models.WeeklyPool) -> None:
 
         scenario = models.CouponScenario(
             weekly_pool_id=pool.id,
-            scenario_type=getattr(models.ScenarioType, scenario_name),
-            risk_profile=models.RiskProfile.medium,
+            scenario_type=getattr(models.ScenarioType, scenario_name).value,
+            risk_profile=models.RiskProfile.medium.value,
             max_columns=params["max_columns"],
             max_doubles=params["max_doubles"],
             max_triples=params["max_triples"],
@@ -152,8 +152,8 @@ def run_optimizer_custom(
 
     scenario = models.CouponScenario(
         weekly_pool_id=pool.id,
-        scenario_type=models.ScenarioType.balanced,
-        risk_profile=getattr(models.RiskProfile, risk_profile, models.RiskProfile.medium),
+        scenario_type=models.ScenarioType.balanced.value,
+        risk_profile=getattr(models.RiskProfile, risk_profile, models.RiskProfile.medium).value,
         max_columns=max_columns,
         max_doubles=max_doubles,
         max_triples=max_triples,
