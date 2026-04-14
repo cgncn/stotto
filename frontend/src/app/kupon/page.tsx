@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { get, post, PoolSummary, CouponScenario } from "@/lib/api";
+import { authedGet, authedPost, PoolSummary, CouponScenario } from "@/lib/api";
 import CoverageBadge from "@/components/CoverageBadge";
 import { SubscriberGate } from "@/components/SubscriberGate";
+import { useAuth } from "@/context/AuthContext";
 
 const SCENARIO_LABELS: Record<string, string> = {
   safe: "Güvenli",
@@ -18,6 +19,7 @@ const SCENARIO_DESC: Record<string, string> = {
 };
 
 export default function KuponPage() {
+  const { token } = useAuth();
   const [poolId, setPoolId] = useState<number | null>(null);
   const [scenarios, setScenarios] = useState<CouponScenario[]>([]);
   const [loading, setLoading] = useState(false);
@@ -31,12 +33,13 @@ export default function KuponPage() {
   const [customScenario, setCustomScenario] = useState<CouponScenario | null>(null);
 
   async function loadScenarios() {
+    if (!token) { setError("Giriş yapmanız gerekiyor"); return; }
     setLoading(true);
     setError(null);
     try {
-      const pool = await get<PoolSummary>("/weekly-pools/current");
+      const pool = await authedGet<PoolSummary>("/weekly-pools/current", token);
       setPoolId(pool.id);
-      const data = await get<CouponScenario[]>(`/weekly-pools/${pool.id}/coupon-scenarios`);
+      const data = await authedGet<CouponScenario[]>(`/weekly-pools/${pool.id}/coupon-scenarios`, token);
       // Keep one of each type
       const unique: Record<string, CouponScenario> = {};
       data.forEach((s) => {
@@ -51,13 +54,14 @@ export default function KuponPage() {
   }
 
   async function runCustomOptimize() {
-    if (!poolId) return;
+    if (!poolId || !token) return;
     setLoading(true);
     setError(null);
     try {
-      const result = await post<CouponScenario>(
+      const result = await authedPost<CouponScenario>(
         `/weekly-pools/${poolId}/coupon-optimize`,
-        { max_columns: maxCols, max_doubles: maxDoubles, max_triples: maxTriples, risk_profile: riskProfile }
+        { max_columns: maxCols, max_doubles: maxDoubles, max_triples: maxTriples, risk_profile: riskProfile },
+        token
       );
       setCustomScenario(result);
     } catch (e: any) {
@@ -72,12 +76,18 @@ export default function KuponPage() {
       <div className="flex flex-col items-center justify-center py-20 gap-4">
         <h1 className="text-2xl font-bold text-gray-800">Kupon Optimizasyonu</h1>
         <p className="text-gray-500 text-sm">Aktif haftanın kupon senaryolarını görüntüleyin.</p>
-        <button
-          onClick={loadScenarios}
-          className="bg-brand-600 text-white px-6 py-2 rounded hover:bg-brand-700 transition"
-        >
-          Senaryoları Yükle
-        </button>
+        {!token ? (
+          <p className="text-amber-600 text-sm font-medium">
+            Bu sayfayı kullanmak için <a href="/auth/giris" className="underline">giriş yapın</a>.
+          </p>
+        ) : (
+          <button
+            onClick={loadScenarios}
+            className="bg-brand-600 text-white px-6 py-2 rounded hover:bg-brand-700 transition"
+          >
+            Senaryoları Yükle
+          </button>
+        )}
         {error && <p className="text-red-500 text-sm">{error}</p>}
       </div>
     );
