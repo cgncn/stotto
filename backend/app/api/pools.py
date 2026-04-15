@@ -589,6 +589,99 @@ def get_match_detail(
                 "result_from_home_perspective": result,
             })
 
+    # ── Team form from standings (last 5 results + season record) ────────────
+    home_team_form: dict | None = None
+    away_team_form: dict | None = None
+    home_last5: list[dict] = []
+    away_last5: list[dict] = []
+    if pm.fixture:
+        standings_snap = (
+            db.query(models.StandingsSnapshot)
+            .filter_by(league_id=pm.fixture.league_id, season=pm.fixture.season)
+            .order_by(models.StandingsSnapshot.snapshot_time.desc())
+            .first()
+        )
+        if standings_snap:
+            try:
+                payload = standings_snap.payload_json or []
+                league_data = payload[0] if payload else {}
+                standings_list = (league_data.get("league") or {}).get("standings", [[]])
+                standings_entries = standings_list[0] if standings_list else []
+                home_ext_id = pm.fixture.home_team.external_provider_id
+                away_ext_id = pm.fixture.away_team.external_provider_id
+
+                def _standings_form(entry: dict) -> dict:
+                    form_str = entry.get("form") or ""
+                    # Parse form characters into structured items (most recent last in API)
+                    form_items = [
+                        {"result": ch, "label": {"W": "G", "D": "B", "L": "M"}.get(ch, "?")}
+                        for ch in form_str
+                    ]
+                    rec = lambda key: {
+                        "played": (entry.get(key) or {}).get("played", 0),
+                        "win": (entry.get(key) or {}).get("win", 0),
+                        "draw": (entry.get(key) or {}).get("draw", 0),
+                        "lose": (entry.get(key) or {}).get("lose", 0),
+                        "goals_for": ((entry.get(key) or {}).get("goals") or {}).get("for", 0),
+                        "goals_against": ((entry.get(key) or {}).get("goals") or {}).get("against", 0),
+                    }
+                    return {
+                        "rank": entry.get("rank"),
+                        "points": entry.get("points"),
+                        "form_string": form_str,
+                        "form_items": form_items,
+                        "all": rec("all"),
+                        "home_record": rec("home"),
+                        "away_record": rec("away"),
+                    }
+
+                home_entry = next((e for e in standings_entries if e.get("team", {}).get("id") == home_ext_id), None)
+                away_entry = next((e for e in standings_entries if e.get("team", {}).get("id") == away_ext_id), None)
+                if home_entry:
+                    home_team_form = _standings_form(home_entry)
+                if away_entry:
+                    away_team_form = _standings_form(away_entry)
+            except Exception:
+                pass
+
+    # ── Absent players from injury snapshot ───────────────────────────────────
+    home_absences: list[dict] = []
+    away_absences: list[dict] = []
+    if pm.fixture:
+        inj_snap = (
+            db.query(models.FixtureInjuriesSnapshot)
+            .filter_by(fixture_id=pm.fixture_id)
+            .order_by(models.FixtureInjuriesSnapshot.snapshot_time.desc())
+            .first()
+        )
+        if inj_snap:
+            seen: set[tuple] = set()
+            home_ext_id = pm.fixture.home_team.external_provider_id
+            away_ext_id = pm.fixture.away_team.external_provider_id
+            for entry in (inj_snap.payload_json or []):
+                player = entry.get("player") or {}
+                team = entry.get("team") or {}
+                pid = player.get("id")
+                tid = team.get("id")
+                key = (pid, tid)
+                if key in seen:
+                    continue
+                seen.add(key)
+                absence_type = player.get("type") or ""
+                reason = player.get("reason") or ""
+                # Map API types to display labels
+                is_confirmed = absence_type in ("Missing Fixture", "Injured")
+                absence_dict = {
+                    "name": player.get("name") or "Bilinmiyor",
+                    "absence_type": absence_type,
+                    "reason": reason,
+                    "is_confirmed": is_confirmed,
+                }
+                if tid == home_ext_id:
+                    home_absences.append(absence_dict)
+                elif tid == away_ext_id:
+                    away_absences.append(absence_dict)
+
     response_obj = MatchDetailOut(
         id=pm.id,
         sequence_no=pm.sequence_no,
@@ -603,6 +696,12 @@ def get_match_detail(
         score_history=score_history,
         features=features,
         h2h=h2h,
+        home_last5=home_last5,
+        away_last5=away_last5,
+        home_team_form=home_team_form,
+        away_team_form=away_team_form,
+        home_absences=home_absences,
+        away_absences=away_absences,
     )
     response_data = response_obj.model_dump()
     # Scrub top-level subscriber-only keys

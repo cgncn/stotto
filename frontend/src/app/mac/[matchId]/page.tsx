@@ -48,6 +48,7 @@ const REASON_LABEL: Record<string, string> = {
   HIGH_MOTIVATION_HOME: "Ev yüksek motivasyon", HIGH_MOTIVATION_AWAY: "Dep. yüksek motivasyon",
   CONGESTION_RISK_AWAY: "Dep. yoğun program", KEY_ATTACKER_ABSENT: "Anahtar forvet yok",
   KEY_DEFENDER_ABSENT: "Anahtar defans yok", LONG_UNBEATEN_HOME: "Uzun yenilmezlik (ev)",
+  HOME_STRONG_AT_HOME: "Evde güçlü form",
 };
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -274,6 +275,14 @@ export default function MatchDetailPage() {
   const awayTeam: string = match.away_team;
   const h2h: unknown[] = match.h2h ?? [];
   const history: unknown[] = match.score_history ?? [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const homeTeamForm: any = match.home_team_form ?? null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const awayTeamForm: any = match.away_team_form ?? null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const homeAbsences: any[] = match.home_absences ?? [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const awayAbsences: any[] = match.away_absences ?? [];
 
   const cov = score?.recommended_coverage ?? score?.primary_pick ?? "?";
   const badgeCls = BADGE[cov] ?? "bg-gray-100 text-gray-700";
@@ -390,6 +399,61 @@ export default function MatchDetailPage() {
           <p className="text-center text-gray-400 text-sm py-4">Skor henüz hesaplanmadı.</p>
         )}
       </div>
+
+      {/* ── Last 5 league form + season record ───────────────────────────────── */}
+      {(homeTeamForm || awayTeamForm) && (
+        <div className="bg-white rounded-xl shadow p-5">
+          <h2 className="text-sm font-bold text-gray-700 mb-4">Lig Formu (Son 5 Maç)</h2>
+          <div className="grid grid-cols-2 gap-5">
+            {([
+              { team: homeTeam, form: homeTeamForm, sideColor: "text-blue-600", recKey: "home_record", recLabel: "Evde" },
+              { team: awayTeam, form: awayTeamForm, sideColor: "text-red-500", recKey: "away_record", recLabel: "Deplasmanda" },
+            ] as const).map(({ team, form, sideColor, recKey, recLabel }) => {
+              if (!form) return (
+                <div key={team}>
+                  <p className={`text-xs font-semibold mb-2 truncate ${sideColor}`}>{team}</p>
+                  <p className="text-xs text-gray-400">Veri yok</p>
+                </div>
+              );
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const items: any[] = form.form_items ?? [];
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const rec: any = (form as any)[recKey] ?? {};
+              const FORM_PILL: Record<string, string> = {
+                W: "bg-green-500 text-white", D: "bg-amber-400 text-white", L: "bg-red-500 text-white", "?": "bg-gray-200 text-gray-500",
+              };
+              return (
+                <div key={team}>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className={`text-xs font-semibold truncate ${sideColor}`}>{team}</p>
+                    {form.rank && <span className="text-[10px] text-gray-400 shrink-0 ml-1">{form.rank}. sıra · {form.points} puan</span>}
+                  </div>
+                  {/* Form pills — most recent last in API, reverse to show most recent first */}
+                  <div className="flex gap-1 mb-3">
+                    {[...items].reverse().map((item, i) => (
+                      <span key={i} className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${FORM_PILL[item.result] ?? FORM_PILL["?"]}`}>
+                        {item.label}
+                      </span>
+                    ))}
+                    {items.length === 0 && <span className="text-xs text-gray-400">—</span>}
+                  </div>
+                  {/* Venue-specific record */}
+                  {rec.played > 0 && (
+                    <div className="text-[10px] text-gray-500">
+                      <span className="font-semibold text-gray-700">{recLabel}: </span>
+                      <span className="text-green-600 font-semibold">{rec.win}G</span>
+                      {" "}<span className="text-amber-500 font-semibold">{rec.draw}B</span>
+                      {" "}<span className="text-red-500 font-semibold">{rec.lose}M</span>
+                      {" "}·{" "}
+                      <span className="text-gray-600">{rec.goals_for} atılan / {rec.goals_against} yenilen ({rec.played} maç)</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Context strip: rest days / break / congestion ─────────────────────── */}
       {hasContext && (
@@ -637,32 +701,77 @@ export default function MatchDetailPage() {
         </div>
       )}
 
-      {/* ── Key absences (upgraded) ───────────────────────────────────────────── */}
-      {feats && (
+      {/* ── Key absences — penalty score + player names ───────────────────────── */}
+      {(homeAbsences.length > 0 || awayAbsences.length > 0 || (feats && (
         (feats.lineup_penalty_home ?? 0) > 0.05 ||
         (feats.lineup_penalty_away ?? 0) > 0.05 ||
         feats.key_attacker_absent_home ||
         feats.key_attacker_absent_away ||
         feats.key_defender_absent_home ||
         feats.key_defender_absent_away
-      ) ? (
+      ))) ? (
         <div className="bg-white rounded-xl shadow p-5 border-l-4 border-l-amber-400">
           <h2 className="text-sm font-bold text-gray-700 mb-3">⚠ Kadro Uyarısı</h2>
           <div className="grid grid-cols-2 gap-4">
             {[
-              { team: homeTeam, side: "home", penalty: feats?.lineup_penalty_home, attacker: feats?.key_attacker_absent_home, defender: feats?.key_defender_absent_home, color: "text-blue-700" },
-              { team: awayTeam, side: "away", penalty: feats?.lineup_penalty_away, attacker: feats?.key_attacker_absent_away, defender: feats?.key_defender_absent_away, color: "text-red-600" },
-            ].map(({ team, penalty, attacker, defender, color }) => (
+              {
+                team: homeTeam,
+                penalty: feats?.lineup_penalty_home,
+                attacker: feats?.key_attacker_absent_home,
+                defender: feats?.key_defender_absent_home,
+                color: "text-blue-700",
+                absences: homeAbsences,
+              },
+              {
+                team: awayTeam,
+                penalty: feats?.lineup_penalty_away,
+                attacker: feats?.key_attacker_absent_away,
+                defender: feats?.key_defender_absent_away,
+                color: "text-red-600",
+                absences: awayAbsences,
+              },
+            ].map(({ team, penalty, attacker, defender, color, absences }) => (
               <div key={team}>
                 <p className={`font-semibold text-sm ${color} mb-1`}>{team}</p>
                 {(penalty ?? 0) > 0.05 && (
-                  <p className="text-xs text-gray-500">Eksik etkisi: <span className="font-bold text-red-500">{((penalty ?? 0) * 100).toFixed(0)}/100</span></p>
+                  <p className="text-xs text-gray-500 mb-1">
+                    Kadro etkisi: <span className="font-bold text-red-500">{((penalty ?? 0) * 100).toFixed(0)}/100</span>
+                  </p>
                 )}
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {attacker && <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200 font-medium">⚽ Anahtar Forvet Yok</span>}
-                  {defender && <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 font-medium">🛡 Anahtar Defans Yok</span>}
-                  {!attacker && !defender && (penalty ?? 0) > 0.05 && <span className="text-[10px] text-gray-400">Genel kadro eksikliği</span>}
+                {/* Broad absence-type badges */}
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {attacker && <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200 font-medium">⚽ Anahtar Forvet</span>}
+                  {defender && <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 font-medium">🛡 Anahtar Defans</span>}
                 </div>
+                {/* Player list */}
+                {absences.length > 0 ? (
+                  <ul className="space-y-1">
+                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                    {absences.map((p: any, i: number) => {
+                      const isConfirmed = p.is_confirmed;
+                      const typeLabel = p.absence_type === "Missing Fixture" ? "Cezalı" : p.absence_type === "Injured" ? "Sakatlanmış" : "Şüpheli";
+                      const dotColor = isConfirmed ? "bg-red-500" : "bg-amber-400";
+                      return (
+                        <li key={i} className="flex items-start gap-2 text-xs">
+                          <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
+                          <span>
+                            <span className="font-semibold text-gray-800">{p.name}</span>
+                            <span className={`ml-1 text-[10px] font-medium ${isConfirmed ? "text-red-600" : "text-amber-600"}`}>
+                              {typeLabel}
+                            </span>
+                            {p.reason && (
+                              <span className="ml-1 text-gray-400 text-[10px]">({p.reason})</span>
+                            )}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (penalty ?? 0) > 0.05 ? (
+                  <p className="text-[10px] text-gray-400">Genel kadro eksikliği</p>
+                ) : (
+                  <p className="text-[10px] text-green-600">Eksik yok</p>
+                )}
               </div>
             ))}
           </div>

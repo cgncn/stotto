@@ -120,6 +120,33 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch, cal: dict | None = Non
     # ── Score_2 (Away Win) ─────────────────────────────────────────────────
     score_2 = sum(w * getattr(f, sig) for sig, w in _w2.items())
 
+    # ── Draw dampening & home form at home adjustment ─────────────────────
+    # Draw is statistically over-represented in balanced matches; suppress it
+    # unless both teams are confirmed strong in their respective venues.
+    _DRAW_BASE_DAMPENER = 0.04   # always reduce draw score a little
+    _HOME_FORM_THRESHOLD = 0.60  # above this, home team is "strong at home"
+    _AWAY_FORM_THRESHOLD = 0.60  # above this, away team is "strong when away"
+
+    score_x -= _DRAW_BASE_DAMPENER
+
+    home_form_at_home = f.home_form_at_home
+    away_form_when_away = f.away_form_when_away
+
+    if home_form_at_home > _HOME_FORM_THRESHOLD:
+        # Strong home form → shift weight from X to 1
+        home_bonus = (home_form_at_home - _HOME_FORM_THRESHOLD) * 0.50  # 0 – 0.20
+        score_1 += home_bonus
+        score_x -= home_bonus * 0.70  # most of the draw penalty absorbed here
+
+        # Only partially restore draw if away team is also strong when away
+        if away_form_when_away > _AWAY_FORM_THRESHOLD:
+            restoration = min(
+                home_bonus * 0.55,
+                (away_form_when_away - _AWAY_FORM_THRESHOLD) * 0.40,
+            )
+            score_x += restoration
+            score_1 -= restoration * 0.45
+
     p1, px, p2 = _softmax([score_1, score_x, score_2], T=SOFTMAX_T)
 
     # ── Primary / Secondary pick ────────────────────────────────────────────
@@ -333,6 +360,8 @@ def _build_reason_codes(
         codes.append("KEY_DEFENDER_ABSENT")
     if f.long_unbeaten_home:
         codes.append("LONG_UNBEATEN_HOME")
+    if f.home_form_at_home > 0.65:
+        codes.append("HOME_STRONG_AT_HOME")
     return codes
 
 
@@ -469,6 +498,33 @@ class _FeatureBundle:
     def last_5_away_attack_edge(self) -> float:
         rf = getattr(self._s, "raw_features", None) or {}
         return float(rf.get("last_5", {}).get("last_5_away_attack_edge", 0.5))
+
+    @property
+    def home_form_at_home(self) -> float:
+        """
+        Composite signal: how strong the home team is specifically at their home venue.
+        Combines structural home advantage, last-5 attack edge, long unbeaten run, and H2H record.
+        Returns 0–1 (0.5 = neutral, >0.65 = strong, >0.75 = dominant at home).
+        """
+        base = 0.50
+        # Structural home advantage (typically 0.04–0.12 normalized)
+        ha = self._get("home_advantage", 0.06)
+        base += min(0.12, ha * 1.2)
+        # Last-5 home attack edge (0=weak, 0.5=neutral, 1=dominant)
+        l5 = self.last_5_home_attack_edge
+        base += (l5 - 0.5) * 0.25
+        # Long unbeaten run at home — strong signal of home dominance
+        if self._getb("long_unbeaten_home"):
+            base += 0.14
+        # H2H home win rate (only if meaningful sample)
+        if self.h2h_sample_size >= 3:
+            base += (self.h2h_home_win_rate_raw - 0.33) * 0.25
+        return max(0.0, min(1.0, base))
+
+    @property
+    def away_form_when_away(self) -> float:
+        """How strong the away team is specifically when playing away from home."""
+        return self.away_form_away  # away_form_away = away team's performance as visitors
 
     @property
     def draw_risk(self):

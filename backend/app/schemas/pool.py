@@ -64,6 +64,12 @@ class MatchDetailOut(BaseModel):
     score_history: list[dict[str, Any]]
     features: dict[str, Any] | None = None
     h2h: list[dict[str, Any]] = []
+    home_last5: list[dict[str, Any]] = []
+    away_last5: list[dict[str, Any]] = []
+    home_team_form: dict[str, Any] | None = None
+    away_team_form: dict[str, Any] | None = None
+    home_absences: list[dict[str, Any]] = []
+    away_absences: list[dict[str, Any]] = []
 
     model_config = {"from_attributes": True}
 
