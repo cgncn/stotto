@@ -22,11 +22,11 @@ logger = logging.getLogger(__name__)
 MODEL_VERSION = "v2"
 
 # Softmax temperature (lower T = more confident distribution)
-SOFTMAX_T = 0.4
+SOFTMAX_T = 0.25
 
 # Coverage-need thresholds from spec §9.4
-SINGLE_MAX = 38.0
-DOUBLE_MAX = 72.0
+SINGLE_MAX = 45.0
+DOUBLE_MAX = 75.0
 
 # Confidence suppressors
 _DERBY_SUPPRESSOR = 0.75
@@ -152,7 +152,7 @@ def _score_match(db: Session, pm: models.WeeklyPoolMatch, cal: dict | None = Non
     if f.long_unbeaten_home and primary_pick == "1":
         confidence_raw *= _LONG_UNBEATEN_SUPPRESSOR
 
-    confidence_score = max(0.0, min(100.0, confidence_raw * 100.0))
+    confidence_score = max(0.0, min(100.0, confidence_raw * 180.0))
 
     # ── Coverage need ──────────────────────────────────────────────────────
     uncertainty = 1.0 - p_max
