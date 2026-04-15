@@ -2,7 +2,7 @@ import { get, PoolMatch, PoolSummary } from "@/lib/api";
 import MatchTable from "@/components/MatchTable";
 import { SkeletonRow } from "@/components/Skeleton";
 
-export const revalidate = 60;
+export const revalidate = 30;
 
 async function getData(): Promise<{ pool: PoolSummary | null; matches: PoolMatch[]; fetchedAt: string }> {
   const fetchedAt = new Date().toISOString();
