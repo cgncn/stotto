@@ -35,8 +35,6 @@ services:
     mem_limit: 512m
     cpus: '1.0'
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    ports:
-      - "8001:8000"
     env_file: .env
     depends_on:
       postgres:
@@ -81,8 +79,6 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     cpus: '1.0'
-    ports:
-      - "3001:3001"
     env_file: .env
     environment:
       NEXT_PUBLIC_API_URL: https://api.stotto.com.tr
